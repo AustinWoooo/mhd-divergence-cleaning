@@ -96,6 +96,60 @@ GLMFlux compute_hyperbolic_glm_flux(
     return F;
 }
 
+void update_hyperbolic_glm_1d(
+    std::vector<State>& U,
+    const GLMParams& params
+) {
+    const int N = static_cast<int>(U.size());
+    const double dx = params.dx;
+    const double dt = params.dt;
+    const double ch = params.ch;
+
+    if (N < 2) {
+        throw std::runtime_error("update_hyperbolic_glm_1d requires N >= 2");
+    }
+    if (dx <= 0.0) {
+        throw std::runtime_error("dx must be positive");
+    }
+    if (dt < 0.0) {
+        throw std::runtime_error("dt must be non-negative");
+    }
+    if (ch < 0.0) {
+        throw std::runtime_error("ch must be non-negative");
+    }
+
+    std::vector<GLMFlux> flux(N + 1);
+
+    // Periodic boundary for standalone 1D toy test.
+    for (int iface = 0; iface <= N; ++iface) {
+        const int iL = (iface - 1 + N) % N;
+        const int iR = iface % N;
+
+        flux[iface] = compute_hyperbolic_glm_flux(
+            U[iL][BX],
+            U[iL][PSI],
+            U[iR][BX],
+            U[iR][PSI],
+            ch
+        );
+    }
+
+    std::vector<State> Uold = U;
+
+    for (int i = 0; i < N; ++i) {
+        const int left_face  = i;
+        const int right_face = i + 1;
+
+        U[i][BX] =
+            Uold[i][BX]
+          - dt / dx * (flux[right_face].FBn - flux[left_face].FBn);
+
+        U[i][PSI] =
+            Uold[i][PSI]
+          - dt / dx * (flux[right_face].Fpsi - flux[left_face].Fpsi);
+    }
+}
+
 void apply_parabolic_cleaning_1d(
     std::vector<State>& U,
     const GLMParams& params

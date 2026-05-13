@@ -4,6 +4,48 @@
 #include <algorithm>
 #include <stdexcept>
 
+int normal_B_index(Direction dir) {
+    switch (dir) {
+        case Direction::X:
+            return BX;
+        case Direction::Y:
+            return BY;
+        case Direction::Z:
+            return BZ;
+        default:
+            throw std::runtime_error("Unknown direction");
+    }
+}
+
+void add_glm_flux_correction(
+    State& flux,
+    const State& UL,
+    const State& UR,
+    Direction dir,
+    const GLMParams& params
+) {
+    if (
+        params.type != CleaningType::HYPERBOLIC_GLM &&
+        params.type != CleaningType::MIXED_GLM &&
+        params.type != CleaningType::MIXED_EGLM
+    ) {
+        return;
+    }
+
+    const int Bn = normal_B_index(dir);
+
+    GLMFlux Fglm = compute_hyperbolic_glm_flux(
+        UL[Bn],
+        UL[PSI],
+        UR[Bn],
+        UR[PSI],
+        params.ch
+    );
+
+    flux[Bn]  += Fglm.FBn;
+    flux[PSI] += Fglm.Fpsi;
+}
+
 std::string cleaning_name(CleaningType type) {
     switch (type) {
         case CleaningType::NONE:
@@ -54,44 +96,38 @@ GLMFlux compute_hyperbolic_glm_flux(
     return F;
 }
 
-void update_hyperbolic_glm_1d(
+void apply_parabolic_cleaning_1d(
     std::vector<State>& U,
     const GLMParams& params
 ) {
     const int N = static_cast<int>(U.size());
     const double dx = params.dx;
     const double dt = params.dt;
-    const double ch = params.ch;
+    const double D = params.cp * params.cp;
 
-    std::vector<GLMFlux> flux(N + 1);
-
-    // Periodic boundary for toy test.
-    for (int iface = 0; iface <= N; ++iface) {
-        int iL = (iface - 1 + N) % N;
-        int iR = iface % N;
-
-        flux[iface] = compute_hyperbolic_glm_flux(
-            U[iL][BX],
-            U[iL][PSI],
-            U[iR][BX],
-            U[iR][PSI],
-            ch
-        );
+    if (N < 3) {
+        throw std::runtime_error("apply_parabolic_cleaning_1d requires N >= 3");
+    }
+    if (dx <= 0.0) {
+        throw std::runtime_error("dx must be positive");
+    }
+    if (dt < 0.0) {
+        throw std::runtime_error("dt must be non-negative");
+    }
+    if (params.cp < 0.0) {
+        throw std::runtime_error("cp must be non-negative");
     }
 
     std::vector<State> Uold = U;
 
     for (int i = 0; i < N; ++i) {
-        const int iLface = i;
-        const int iRface = i + 1;
+        const int ip = (i + 1) % N;
+        const int im = (i - 1 + N) % N;
 
-        U[i][BX] =
-            Uold[i][BX]
-          - dt / dx * (flux[iRface].FBn - flux[iLface].FBn);
+        const double lapBx =
+            (Uold[ip][BX] - 2.0 * Uold[i][BX] + Uold[im][BX]) / (dx * dx);
 
-        U[i][PSI] =
-            Uold[i][PSI]
-          - dt / dx * (flux[iRface].Fpsi - flux[iLface].Fpsi);
+        U[i][BX] = Uold[i][BX] + dt * D * lapBx;
     }
 }
 
@@ -103,6 +139,16 @@ void apply_mixed_glm_damping(
     const double cp = params.cp;
     const double dt = params.dt;
 
+    if (cp <= 0.0) {
+        throw std::runtime_error("cp must be positive for mixed GLM damping");
+    }
+    if (ch < 0.0) {
+        throw std::runtime_error("ch must be non-negative");
+    }
+    if (dt < 0.0) {
+        throw std::runtime_error("dt must be non-negative");
+    }
+
     const double factor = std::exp(-dt * ch * ch / (cp * cp));
 
     for (auto& cell : U) {
@@ -110,36 +156,7 @@ void apply_mixed_glm_damping(
     }
 }
 
-void apply_parabolic_cleaning_1d(
-    std::vector<State>& U,
-    const GLMParams& params
-) {
-    const int N = static_cast<int>(U.size());
-    const double dx = params.dx;
-    const double dt = params.dt;
-    const double cp = params.cp;
 
-    std::vector<double> divB(N, 0.0);
-    std::vector<double> gradDivB(N, 0.0);
-
-    for (int i = 0; i < N; ++i) {
-        int ip = (i + 1) % N;
-        int im = (i - 1 + N) % N;
-
-        divB[i] = (U[ip][BX] - U[im][BX]) / (2.0 * dx);
-    }
-
-    for (int i = 0; i < N; ++i) {
-        int ip = (i + 1) % N;
-        int im = (i - 1 + N) % N;
-
-        gradDivB[i] = (divB[ip] - divB[im]) / (2.0 * dx);
-    }
-
-    for (int i = 0; i < N; ++i) {
-        U[i][BX] += dt * cp * cp * gradDivB[i];
-    }
-}
 
 double compute_divB_1d(
     const std::vector<State>& U,

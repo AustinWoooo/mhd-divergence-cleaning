@@ -1,7 +1,15 @@
 #pragma once
-#include <vector>
+
 #include <string>
+#include <vector>
+
 #include "state.hpp"
+
+enum class Direction {
+    X,
+    Y,
+    Z
+};
 
 struct GLMParams {
     CleaningType type = CleaningType::MIXED_GLM;
@@ -20,12 +28,22 @@ struct GLMFlux {
 
 std::string cleaning_name(CleaningType type);
 
+int normal_B_index(Direction dir);
+
 GLMFlux compute_hyperbolic_glm_flux(
     double BnL,
     double psiL,
     double BnR,
     double psiR,
     double ch
+);
+
+void add_glm_flux_correction(
+    State& flux,
+    const State& UL,
+    const State& UR,
+    Direction dir,
+    const GLMParams& params
 );
 
 void update_hyperbolic_glm_1d(

@@ -18,3 +18,16 @@ add_executable(test_glm_1d
 target_link_libraries(test_glm_1d
     glm
 )
+add_library(diagnostics
+    src/diagnostics.cpp
+)
+
+
+add_executable(test_glm_2d
+    tests/test_glm_2d.cpp
+)
+
+target_link_libraries(test_glm_2d
+    glm
+    diagnostics
+)

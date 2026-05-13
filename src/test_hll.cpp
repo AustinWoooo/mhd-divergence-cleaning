@@ -2,7 +2,7 @@
 #include <iomanip>
 #include <vector>
 #include <string>
-#include "mhd_solver.hpp"
+#include "../include/HLL_mhd_solver.hpp"
 
 // 輔助函式：用來漂亮地印出向量結果
 void print_vector(const std::string& name, const std::vector<double>& vec) {

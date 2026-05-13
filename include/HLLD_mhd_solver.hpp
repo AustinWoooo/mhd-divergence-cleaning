@@ -6,12 +6,12 @@
 //             "A multi-state HLL approximate Riemann solver for ideal
 //              magnetohydrodynamics"
 //
-//  設計重點:
-//    1. 2.5D 架構 - 雖然空間只有 X/Y 兩個方向的通量,但速度與磁場保留 z 分量
-//       以正確解析 Alfven 波(旋轉間斷)。
-//    2. 方向切換 - 透過「索引旋轉」處理 X/Y 方向通量,而非重寫兩遍程式碼。
-//       這是 Athena / PLUTO / FLASH 等成熟 MHD code 的標準做法。
-//    3. Header-only - 所有實作皆為 inline,避免多重定義錯誤。
+//  Design notes:
+//    1. 2.5D layout -- spatial fluxes in X/Y only, but velocity and magnetic
+//       field retain their Z components to correctly resolve Alfven waves.
+//    2. Direction switching via index rotation: a single HLLD kernel handles
+//       both X and Y fluxes (standard practice in Athena / PLUTO / FLASH).
+//    3. Header-only: all functions are inline to avoid multiple-definition errors.
 // =============================================================================
 
 #ifndef MHD_SOLVER_HPP
@@ -25,16 +25,15 @@
 namespace MHD {
 
 // -----------------------------------------------------------------------------
-//  常數定義
+//  Conservative variable indices (8 components, 2.5D MHD)
+//    IDN       : mass density rho
+//    IM1/2/3   : momenta rho*u, rho*v, rho*w
+//    IEN       : total energy E
+//    IB1/2/3   : magnetic field Bx, By, Bz
+//
+//  Convention: after rotating to the normal frame, index "1" always holds
+//  the normal component and "2","3" hold the two tangential components.
 // -----------------------------------------------------------------------------
-// 守恆變數的索引(8 個分量,2.5D MHD)
-//   IDN: 質量密度 rho
-//   IM1, IM2, IM3: 動量 rho*u, rho*v, rho*w
-//   IEN: 總能量 E
-//   IB1, IB2, IB3: 磁場 Bx, By, Bz
-// 注意:在計算 X 方向通量時,IM1=rho*u(法向), IM2=rho*v(切向1), IM3=rho*w(切向2)
-//                            IB1=Bx(法向),    IB2=By(切向1),    IB3=Bz(切向2)
-//       在計算 Y 方向通量時,我們會「旋轉」狀態,使法向分量永遠在「1」的位置。
 constexpr int IDN = 0;
 constexpr int IM1 = 1;
 constexpr int IM2 = 2;
@@ -45,19 +44,14 @@ constexpr int IB2 = 6;
 constexpr int IB3 = 7;
 constexpr int NVAR = 8;
 
-// 數值安全閾值,避免除以零
+// Small floor to guard against division by zero
 constexpr double TINY_NUMBER = 1.0e-20;
 
 // -----------------------------------------------------------------------------
-//  State 結構體:儲存原始變數(Primitive Variables)
-// -----------------------------------------------------------------------------
-//   rho: 密度
-//   u, v, w: 三個速度分量(x, y, z)
-//   p:      氣體壓力(thermal pressure,不含磁壓)
-//   Bx, By, Bz: 三個磁場分量
+//  State -- primitive variables W = [rho, u, v, w, p, Bx, By, Bz]
 //
-// 注意:這裡的「u, v, w」是「物理 x, y, z」方向的速度。
-//       在求解器內部,我們會旋轉成「法向 / 切向1 / 切向2」的座標系。
+//  u/v/w and Bx/By/Bz are in the physical (x,y,z) frame on input/output.
+//  Inside the solver they are temporarily rotated to the normal frame.
 // -----------------------------------------------------------------------------
 struct State {
     double rho;
@@ -72,10 +66,10 @@ struct State {
         : rho(r), u(uu), v(vv), w(ww), p(pp), Bx(bx), By(by), Bz(bz) {}
 
     // -------------------------------------------------------------------------
-    //  原始 -> 守恆變數
+    //  Primitive -> conserved
     //  U = [rho, rho*u, rho*v, rho*w, E, Bx, By, Bz]
-    //  E = p/(gamma-1) + (1/2)*rho*(u^2+v^2+w^2) + (1/2)*(Bx^2+By^2+Bz^2)
-    //                   ^熱能              ^動能                ^磁能
+    //  E = p/(gamma-1)  +  (1/2)*rho*|v|^2  +  (1/2)*|B|^2
+    //      thermal          kinetic              magnetic
     // -------------------------------------------------------------------------
     std::vector<double> to_conserved(double gamma) const {
         std::vector<double> U(NVAR);
@@ -83,8 +77,8 @@ struct State {
         U[IM1] = rho * u;
         U[IM2] = rho * v;
         U[IM3] = rho * w;
-        double ke = 0.5 * rho * (u*u + v*v + w*w);     // 動能密度
-        double me = 0.5 * (Bx*Bx + By*By + Bz*Bz);     // 磁能密度
+        double ke = 0.5 * rho * (u*u + v*v + w*w);     // kinetic energy density
+        double me = 0.5 * (Bx*Bx + By*By + Bz*Bz);     // magnetic energy density
         U[IEN] = p / (gamma - 1.0) + ke + me;
         U[IB1] = Bx;
         U[IB2] = By;
@@ -93,8 +87,8 @@ struct State {
     }
 
     // -------------------------------------------------------------------------
-    //  守恆 -> 原始變數
-    //  p = (gamma-1) * (E - 動能 - 磁能)
+    //  Conserved -> primitive
+    //  p = (gamma-1) * (E - kinetic - magnetic)
     // -------------------------------------------------------------------------
     static State from_conserved(const std::vector<double>& U, double gamma) {
         State W;
@@ -114,28 +108,22 @@ struct State {
 };
 
 // -----------------------------------------------------------------------------
-//  方向切換:將「物理座標」狀態旋轉為「法向座標」狀態
+//  Rotate state from the physical frame to the normal frame.
 //
-//  direction = 0 (X 方向):
-//      法向 = x   ->  (u, Bx) 為法向分量,維持原樣
-//      切向1= y       (v, By) 為切向分量
-//      切向2= z       (w, Bz) 為切向分量
+//  direction = 0 (X-flux): no-op; (u,v,w) and (Bx,By,Bz) are unchanged.
+//  direction = 1 (Y-flux): cycle left so that the Y component moves to slot 1:
+//      (u,v,w)    ->  (v,w,u)
+//      (Bx,By,Bz) ->  (By,Bz,Bx)
 //
-//  direction = 1 (Y 方向):
-//      法向 = y   ->  將 (v, By) 換到「1」位置
-//      切向1= z   ->  原 (w, Bz) 變成切向1
-//      切向2= x   ->  原 (u, Bx) 變成切向2
-//
-//  關鍵:旋轉後我們可以用「同一段 HLLD 程式碼」處理兩個方向,
-//        最後再把通量旋轉回物理座標。
+//  This lets a single HLLD kernel handle both directions; the normal component
+//  is always in slot "1" after rotation.
 // -----------------------------------------------------------------------------
 inline State rotate_to_normal(const State& W, int direction) {
     if (direction == 0) {
-        // X-方向:不旋轉
+        // X-direction: no rotation needed
         return W;
     } else {
-        // Y-方向:(u,v,w) -> (v,w,u),(Bx,By,Bz) -> (By,Bz,Bx)
-        // 也就是把 Y 分量搬到第一個位置
+        // Y-direction: move Y component into the normal (slot-1) position
         State Wr = W;
         Wr.u  = W.v;   Wr.v  = W.w;   Wr.w  = W.u;
         Wr.Bx = W.By;  Wr.By = W.Bz;  Wr.Bz = W.Bx;
@@ -143,23 +131,21 @@ inline State rotate_to_normal(const State& W, int direction) {
     }
 }
 
-// 把計算好的「法向座標」通量,旋轉回「物理座標」通量
+// Inverse rotation: map the normal-frame flux back to the physical frame.
+// Reverses the left-cycle applied in rotate_to_normal: (1,2,3) -> (3,1,2)
 inline std::vector<double> rotate_flux_back(const std::vector<double>& F, int direction) {
     if (direction == 0) {
-        return F;  // X 方向不需轉
+        return F;  // X-direction: no rotation needed
     } else {
-        // 反向旋轉:(1,2,3) -> (3,1,2)
-        // 因為原本的 (u,v,w) 是 (v,w,u),要還原回 (u,v,w)
+        // Right-cycle to undo (u,v,w)->(v,w,u): F_normal=(1,2,3) -> F_phys=(3,1,2)
         std::vector<double> Fb(NVAR);
         Fb[IDN] = F[IDN];
         Fb[IEN] = F[IEN];
-        // 動量:F[IM1]=法向(=y) -> 應該放在 IM2
-        //      F[IM2]=切1(=z)  -> 應該放在 IM3
-        //      F[IM3]=切2(=x)  -> 應該放在 IM1
+        // F[IM1]=normal(y)->IM2, F[IM2]=tang1(z)->IM3, F[IM3]=tang2(x)->IM1
         Fb[IM1] = F[IM3];
         Fb[IM2] = F[IM1];
         Fb[IM3] = F[IM2];
-        // 磁場同理
+        // Same permutation for magnetic flux components
         Fb[IB1] = F[IB3];
         Fb[IB2] = F[IB1];
         Fb[IB3] = F[IB2];
@@ -168,61 +154,47 @@ inline std::vector<double> rotate_flux_back(const std::vector<double>& F, int di
 }
 
 // -----------------------------------------------------------------------------
-//  快磁聲波 (Fast Magnetosonic Wave) 波速
+//  Fast magnetosonic wave speed (evaluated in the normal frame, so Bx = Bn)
 //
-//  數學推導:
-//    MHD 有 7 個波(從 -cf 到 +cf):
-//        fast(-cf), Alfven(-ca), slow(-cs), entropy(0),
-//        slow(+cs),  Alfven(+ca), fast(+cf)
+//  Dispersion relation for the outermost MHD characteristic:
+//      cf^2 = (1/2) * { (a^2 + b^2) + sqrt[(a^2 + b^2)^2 - 4*a^2*bn^2] }
+//  where:
+//      a^2  = gamma*p/rho   -- sound speed squared
+//      b^2  = |B|^2/rho     -- total Alfven speed squared
+//      bn^2 = Bx^2/rho      -- normal Alfven speed squared (Bx is normal after rotation)
 //
-//    其中 fast wave 是最外側的波,色散關係:
-//
-//        c_f^2 = (1/2) * { a^2 + b^2 + sqrt[ (a^2+b^2)^2 - 4*a^2*b_n^2 ] }
-//
-//    其中:
-//        a   = sqrt(gamma*p/rho)   ... 聲速
-//        b^2 = (Bx^2+By^2+Bz^2)/rho ... 總 Alfven 速度平方
-//        b_n = B_normal / sqrt(rho) ... 法向 Alfven 速度
-//
-//    使用「法向 Alfven 速度」是因為 fast wave 沿法向傳播時,
-//    切向磁場提供額外的恢復力。
-//
-//  數值穩定性:
-//    sqrt 內的判別式理論上恆 >= 0,但浮點誤差可能讓它變成微小負數,
-//    所以用 std::max(0.0, ...) 保護。
+//  The discriminant is non-negative in exact arithmetic; clamp to 0 to guard
+//  against tiny negative values from floating-point rounding.
 // -----------------------------------------------------------------------------
 inline double fast_magnetosonic_speed(const State& W, double gamma) {
     double rho = std::max(W.rho, TINY_NUMBER);
-    double a2  = gamma * W.p / rho;                              // 聲速平方
-    double b2  = (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz) / rho;      // 總 Alfven 速度平方
-    double bn2 = W.Bx * W.Bx / rho;                              // 法向 Alfven 速度平方
-                                                                  // (因為 rotate 後法向恆為 Bx)
+    double a2  = gamma * W.p / rho;                              // sound speed^2
+    double b2  = (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz) / rho;   // total Alfven speed^2
+    double bn2 = W.Bx * W.Bx / rho;                             // normal Alfven speed^2
     double term = a2 + b2;
     double disc = term * term - 4.0 * a2 * bn2;
-    disc = std::max(disc, 0.0);                                  // 浮點保護
+    disc = std::max(disc, 0.0);                                  // floating-point guard
     double cf2 = 0.5 * (term + std::sqrt(disc));
     return std::sqrt(std::max(cf2, 0.0));
 }
 
 // -----------------------------------------------------------------------------
-//  物理通量 F(U) 計算(已在「法向座標」下)
+//  Physical flux F(U) evaluated in the normal frame (normal direction = x)
 //
-//  Ideal MHD 通量(法向方向):
-//      F_rho   = rho * u
-//      F_mom1  = rho*u^2 + p + (1/2)|B|^2 - Bx^2     (法向動量 + 總壓 - 磁應力)
-//      F_mom2  = rho*u*v - Bx*By                      (切向動量1)
-//      F_mom3  = rho*u*w - Bx*Bz                      (切向動量2)
-//      F_E     = (E + p + (1/2)|B|^2)*u - Bx*(u*Bx + v*By + w*Bz)
-//                ^總焓 * 法向速度          ^Poynting flux 的法向分量
-//      F_B1    = 0                                    (法向磁場不變,div B = 0)
-//      F_B2    = By*u - Bx*v                          (切向磁場感應)
-//      F_B3    = Bz*u - Bx*w
+//  F_rho  = rho*u
+//  F_mom1 = rho*u^2 + pT - Bx^2          (normal momentum; pT = p + |B|^2/2)
+//  F_mom2 = rho*u*v - Bx*By              (tangential momentum 1)
+//  F_mom3 = rho*u*w - Bx*Bz              (tangential momentum 2)
+//  F_E    = (E + pT)*u - Bx*(v.B)        (energy + normal Poynting flux)
+//  F_B1   = 0                             (normal B is frozen; enforces div B = 0)
+//  F_B2   = By*u - Bx*v                  (induction, tangential 1)
+//  F_B3   = Bz*u - Bx*w                  (induction, tangential 2)
 // -----------------------------------------------------------------------------
 inline std::vector<double> physical_flux(const State& W, double gamma) {
     std::vector<double> F(NVAR);
-    double pmag = 0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);     // 磁壓
-    double ptot = W.p + pmag;                                     // 總壓 = 熱壓 + 磁壓
-    double vdotB = W.u*W.Bx + W.v*W.By + W.w*W.Bz;               // v.B
+    double pmag = 0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);
+    double ptot = W.p + pmag;                                    // total pressure
+    double vdotB = W.u*W.Bx + W.v*W.By + W.w*W.Bz;
     double E = W.p/(gamma-1.0) + 0.5*W.rho*(W.u*W.u+W.v*W.v+W.w*W.w) + pmag;
 
     F[IDN] = W.rho * W.u;
@@ -237,135 +209,125 @@ inline std::vector<double> physical_flux(const State& W, double gamma) {
 }
 
 // -----------------------------------------------------------------------------
-//  HLLD Riemann Solver(法向座標下)
+//  HLLD Riemann solver -- normal frame (Miyoshi & Kusano 2005)
 //
-//  Miyoshi & Kusano (2005) 的核心思想:
-//  -------------------------------------
-//    波結構從左到右為:
-//        U_L  |  U_L*  |  U_L**  |  U_R**  |  U_R*  |  U_R
-//             S_L      S_L*       S_M       S_R*    S_R
+//  Wave structure (left to right):
+//      U_L | U_L* | U_L** | U_R** | U_R* | U_R
+//          SL     SL*      SM      SR*    SR
 //
-//    - S_L, S_R: 最外側的快磁聲波(將外部未擾動區域與內部分開)
-//    - S_L*, S_R*: 阿爾文波(讓切向磁場與切向速度旋轉)
-//    - S_M: 中間接觸間斷(密度跳變,但 u, p_total 連續)
+//  SL, SR   -- outermost fast magnetosonic waves (Davis estimate)
+//  SL*, SR* -- rotational (Alfven) discontinuities
+//  SM       -- contact discontinuity (entropy wave)
 //
-//  推導步驟(關鍵方程式):
-//  -------------------------------------
-//  (1) 估計 S_L, S_R:用 Davis 估計
-//          S_L = min(u_L - cf_L,  u_R - cf_R)
-//          S_R = max(u_L + cf_L,  u_R + cf_R)
+//  Key equations (Miyoshi & Kusano eqs. 16-40):
 //
-//  (2) S_M 來自「跨越所有內部波」的 Rankine-Hugoniot:
-//      法向動量守恆,p_total 在 S_M 兩側相等
-//          S_M = [(S_R - u_R)*rho_R*u_R - (S_L - u_L)*rho_L*u_L - pT_R + pT_L]
-//                / [(S_R - u_R)*rho_R - (S_L - u_L)*rho_L]
+//  (1) Outer wave speeds (Davis):
+//        SL = min(uL - cfL, uR - cfR)
+//        SR = max(uL + cfL, uR + cfR)
 //
-//      其中 pT = p + |B|^2/2 (總壓)
-//      且 S_M 區域內 u* = u** = S_M, pT* = pT** 為常數
+//  (2) Contact speed SM from normal-momentum R-H across both outer waves:
+//        SM = [(SR-uR)*rhoR*uR - (SL-uL)*rhoL*uL - pTR + pTL]
+//             / [(SR-uR)*rhoR   - (SL-uL)*rhoL]
+//      Total pressure is uniform across all inner waves:
+//        pT* = pTL + rhoL*(SL-uL)*(SM-uL)
 //
-//  (3) Star 區密度(從質量守恆 R-H 關係):
-//          rho_L* = rho_L * (S_L - u_L) / (S_L - S_M)
-//          rho_R* = rho_R * (S_R - u_R) / (S_R - S_M)
+//  (3) Star-state density from mass R-H:
+//        rho_K* = rho_K*(S_K - u_K) / (S_K - SM),  K in {L, R}
 //
-//  (4) 切向速度 / 磁場(由動量與感應方程的 R-H 推導):
-//          v* = v - Bx*By*(S_M - u) / [rho*(S_L - u)(S_L - S_M) - Bx^2]
-//          B*y = By * [rho*(S_L - u)^2 - Bx^2] / [rho*(S_L - u)(S_L - S_M) - Bx^2]
-//      (w, Bz 同理)
+//  (4) Alfven speeds:
+//        SL* = SM - |Bn| / sqrt(rhoL*)
+//        SR* = SM + |Bn| / sqrt(rhoR*)
 //
-//      當分母 -> 0(即 Bx^2 -> rho*(S_L-u)(S_L-S_M),退化情形):
-//      切向分量不變,v* = v, B*y = By
+//  (5) Tangential star-state from momentum + induction R-H:
+//        denom = rho*(S_K - u_K)*(S_K - SM) - Bn^2
+//        v*  = v  - Bn*By*(SM - u) / denom
+//        B*y = By * [rho*(S_K - u_K)^2 - Bn^2] / denom
+//        (w* and Bz* analogous; unchanged when denom -> 0)
 //
-//  (5) Star 區能量:
-//          E_L* = [ (S_L - u_L)*E_L - pT_L*u_L + pT*S_M
-//                   + Bx*(v.B - v*.B*) ] / (S_L - S_M)
+//  (6) Star-state energy from energy R-H:
+//        E* = [(S_K-u_K)*E - pT*u_K + pT**SM + Bn*(v.B - v*.B*)] / (S_K - SM)
 //
-//  (6) 阿爾文波速:
-//          S_L* = S_M - |Bx| / sqrt(rho_L*)
-//          S_R* = S_M + |Bx| / sqrt(rho_R*)
+//  (7) Double-star state from Alfven R-H across SL* / SR*:
+//        v**  = (sqrt(rhoL*)*vL*  + sqrt(rhoR*)*vR*  + (ByR* - ByL*)*sgn(Bn))
+//               / (sqrt(rhoL*) + sqrt(rhoR*))
+//        By** = (sqrt(rhoL*)*ByR* + sqrt(rhoR*)*ByL*
+//                + sqrt(rhoL*)*sqrt(rhoR*)*(vR* - vL*)*sgn(Bn))
+//               / (sqrt(rhoL*) + sqrt(rhoR*))
+//        E**  = E* -/+ sqrt(rho*) * (v*.B* - v**.B**) * sgn(Bn)
 //
-//  (7) Double-star 區(S_L* 與 S_R* 之間):
-//      密度不變 rho** = rho*,但切向 v, B 由阿爾文波關係決定:
-//          v** = (sqrt(rho_L*)*v_L* + sqrt(rho_R*)*v_R* + (B_R* - B_L*)*sign(Bx))
-//                / (sqrt(rho_L*) + sqrt(rho_R*))
-//          B** = (sqrt(rho_L*)*B_R* + sqrt(rho_R*)*B_L*
-//                 + sqrt(rho_L*)*sqrt(rho_R*)*(v_R* - v_L*)*sign(Bx))
-//                / (sqrt(rho_L*) + sqrt(rho_R*))
+//  (8) Flux selection (6 regions):
+//        F = FL                                        if SL  >= 0
+//        F = FL + SL*(UL* - UL)                        if SL  <= 0 < SL*
+//        F = FL + SL*(UL*-UL)  + SL** *(UL**-UL*)      if SL* <= 0 < SM
+//        F = FR + SR*(UR*-UR)  + SR** *(UR**-UR*)       if SM  <= 0 < SR*
+//        F = FR + SR*(UR* - UR)                        if SR* <= 0 < SR
+//        F = FR                                        if SR  <= 0
 //
-//  (8) 通量公式:
-//          F = F_L                                  if S_L > 0
-//          F = F_L + S_L*(U_L* - U_L)               if S_L <= 0 < S_L*
-//          F = F_L* + S_L**(U_L** - U_L*)
-//                  (= F_L + S_L*(U_L*-U_L) + S_L** *(U_L**-U_L*))   if S_L* <= 0 < S_M
-//          F = F_R* + S_R**(U_R** - U_R*)
-//                                                   if S_M <= 0 < S_R*
-//          F = F_R + S_R*(U_R* - U_R)               if S_R* <= 0 < S_R
-//          F = F_R                                  if S_R <= 0
-//
-//  退化處理(Bx ~ 0):
-//      當 Bx -> 0 時,沒有阿爾文波,Star 區 = Double-star 區,
-//      切向分量直接取對應的單側 Star 值,程式碼透過 if 分支處理。
+//  Degenerate case (Bn ~ 0): no Alfven waves; SL* = SM = SR*; the double-star
+//  region vanishes and HLLD reduces to an HLLC-like two-intermediate-state solver.
 // -----------------------------------------------------------------------------
 inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, double gamma) {
-    // ---- 第 0 步:法向磁場 Bx 必須左右一致(由 div B = 0 保證)----
-    // 在無清理機制下,我們取平均;若使用 CT/GLM,Bx 在介面上是唯一定義的。
+    // Step 0: enforce a unique normal B at the interface (average L and R).
+    // With CT/GLM Bn would already be uniquely defined; the average is the
+    // correct fallback when no divergence-cleaning is applied.
     double Bn = 0.5 * (WL.Bx + WR.Bx);
     State L = WL; L.Bx = Bn;
     State R = WR; R.Bx = Bn;
     double Bn2 = Bn * Bn;
 
-    // ---- 第 1 步:計算快磁聲波波速,估計 S_L, S_R ----
+    // Step 1: fast-wave speed estimates (Davis)
     double cfL = fast_magnetosonic_speed(L, gamma);
     double cfR = fast_magnetosonic_speed(R, gamma);
     double SL = std::min(L.u - cfL, R.u - cfR);
     double SR = std::max(L.u + cfL, R.u + cfR);
 
-    // ---- 第 2 步:左右態的守恆變數與物理通量 ----
+    // Step 2: conserved variables and physical fluxes for L and R states
     std::vector<double> UL = L.to_conserved(gamma);
     std::vector<double> UR = R.to_conserved(gamma);
     std::vector<double> FL = physical_flux(L, gamma);
     std::vector<double> FR = physical_flux(R, gamma);
 
-    // 早期返回:全超音速向右 / 向左
+    // Early exit for supersonic flow
     if (SL >= 0.0) return FL;
     if (SR <= 0.0) return FR;
 
-    // 左右態總壓
+    // Total pressure for L and R states
     double pmagL = 0.5*(L.Bx*L.Bx + L.By*L.By + L.Bz*L.Bz);
     double pmagR = 0.5*(R.Bx*R.Bx + R.By*R.By + R.Bz*R.Bz);
     double pTL = L.p + pmagL;
     double pTR = R.p + pmagR;
 
-    // ---- 第 3 步:接觸間斷速度 S_M ----
-    //   S_M = [(SR-uR)*rhoR*uR - (SL-uL)*rhoL*uL - pTR + pTL]
-    //         / [(SR-uR)*rhoR - (SL-uL)*rhoL]
+    // Step 3: contact speed SM and uniform intermediate total pressure pT*
+    //   SM = [(SR-uR)*rhoR*uR - (SL-uL)*rhoL*uL - pTR + pTL]
+    //        / [(SR-uR)*rhoR   - (SL-uL)*rhoL]
     double sLmuL = SL - L.u;
     double sRmuR = SR - R.u;
     double denom_SM = sRmuR * R.rho - sLmuL * L.rho;
     double SM = (sRmuR * R.rho * R.u - sLmuL * L.rho * L.u - pTR + pTL) / denom_SM;
 
-    // 中間區常數總壓 pT*(左右相等)
+    // pT* is equal on both sides of SM; compute from the left side
     double pT_star = pTL + L.rho * sLmuL * (SM - L.u);
-    // 等價於: pTR + R.rho*sRmuR*(SM - R.u),用任一個即可
 
-    // ---- 第 4 步:Star 區密度 ----
+    // Step 4: star-state densities from mass R-H: rho* = rho*(S-u)/(S-SM)
     double rhoL_star = L.rho * sLmuL / (SL - SM);
     double rhoR_star = R.rho * sRmuR / (SR - SM);
     double sqrtRhoLs = std::sqrt(rhoL_star);
     double sqrtRhoRs = std::sqrt(rhoR_star);
 
-    // ---- 第 5 步:阿爾文波速 ----
+    // Step 5: Alfven wave speeds
     double SLs = SM - std::abs(Bn) / sqrtRhoLs;   // S_L*
     double SRs = SM + std::abs(Bn) / sqrtRhoRs;   // S_R*
 
-    // ---- 第 6 步:Star 區切向速度與磁場 ----
-    //   分母:rho*(S - u)*(S - SM) - Bn^2
-    //   當 Bn ~ 0 或分母 ~ 0 時退化,切向分量不變。
+    // Step 6: star-state tangential velocity and magnetic field
+    //   denom = rho*(S-u)*(S-SM) - Bn^2
+    //   When denom -> 0 (Alfven resonance or Bn = 0), tangential components
+    //   are continuous across the wave and pass through unchanged.
     auto compute_star_tangential = [&](const State& W, double S, double sMu,
                                        double& vs, double& ws,
                                        double& Bys, double& Bzs) {
         double denom = W.rho * sMu * (S - SM) - Bn2;
         if (std::abs(denom) < TINY_NUMBER * W.rho * sMu * sMu) {
-            // 退化:切向分量保持不變
+            // Degenerate: tangential components unchanged across the wave
             vs = W.v;  ws = W.w;
             Bys = W.By; Bzs = W.Bz;
         } else {
@@ -385,8 +347,8 @@ inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, do
     compute_star_tangential(L, SL, sLmuL, vL_s, wL_s, ByL_s, BzL_s);
     compute_star_tangential(R, SR, sRmuR, vR_s, wR_s, ByR_s, BzR_s);
 
-    // ---- 第 7 步:Star 區能量 ----
-    //   E* = [ (S - u)*E - pT*u + pT_star*SM + Bn*(v.B - v*.B*) ] / (S - SM)
+    // Step 7: star-state energy from energy R-H
+    //   E* = [(S-u)*E - pT*u + pT**SM + Bn*(v.B - v*.B*)] / (S - SM)
     double vBL  = L.u*Bn + L.v*L.By + L.w*L.Bz;
     double vBR  = R.u*Bn + R.v*R.By + R.w*R.Bz;
     double vBLs = SM*Bn + vL_s*ByL_s + wL_s*BzL_s;
@@ -397,12 +359,12 @@ inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, do
     double EL_s = (sLmuL * EL - pTL * L.u + pT_star * SM + Bn * (vBL - vBLs)) / (SL - SM);
     double ER_s = (sRmuR * ER - pTR * R.u + pT_star * SM + Bn * (vBR - vBRs)) / (SR - SM);
 
-    // 組裝 Star 區守恆變數
+    // Assemble star-state conserved vectors (normal velocity u* = SM by construction)
     auto make_U_star = [&](double rho_s, double v_s, double w_s,
                            double By_s, double Bz_s, double E_s) {
         std::vector<double> Us(NVAR);
         Us[IDN] = rho_s;
-        Us[IM1] = rho_s * SM;          // 法向動量:u* = SM
+        Us[IM1] = rho_s * SM;          // normal momentum: u* = SM
         Us[IM2] = rho_s * v_s;
         Us[IM3] = rho_s * w_s;
         Us[IEN] = E_s;
@@ -414,15 +376,14 @@ inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, do
     std::vector<double> UL_s = make_U_star(rhoL_star, vL_s, wL_s, ByL_s, BzL_s, EL_s);
     std::vector<double> UR_s = make_U_star(rhoR_star, vR_s, wR_s, ByR_s, BzR_s, ER_s);
 
-    // ---- 第 8 步:根據 0 與各波速的相對位置,輸出通量 ----
-    //   一個重要的退化情形:當 Bn ~ 0 時,SL* = SR* = SM,
-    //   沒有阿爾文波分隔的 double-star 區,直接用 star 區即可。
+    // Step 8: select flux region.
+    // When Bn ~ 0 there are no Alfven waves (SL* = SR* = SM); the double-star
+    // region vanishes and we fall back to HLLC-like two-state treatment.
     bool degenerate = (Bn2 < TINY_NUMBER);
 
     if (!degenerate) {
-        // ---- 計算 Double-Star (**) 區 ----
-        //   rho** = rho*
-        //   v**, w**, By**, Bz** 由阿爾文跳躍條件給出
+        // Compute double-star (**) state from Alfven R-H conditions.
+        // rho** = rho*; tangential v and B from the Alfven jump relations:
         double sgn_Bn = (Bn >= 0.0) ? 1.0 : -1.0;
         double sum_sqrt = sqrtRhoLs + sqrtRhoRs;
         double inv_sum  = 1.0 / sum_sqrt;
@@ -436,7 +397,7 @@ inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, do
         double Bz_ss = (sqrtRhoLs * BzR_s + sqrtRhoRs * BzL_s
                         + sqrtRhoLs * sqrtRhoRs * (wR_s - wL_s) * sgn_Bn) * inv_sum;
 
-        // 能量跳躍:E** = E* +/- sqrt(rho*) * (v*.B* - v**.B**) * sign(Bn)
+        // Energy jump: E** = E* -/+ sqrt(rho*) * (v*.B* - v**.B**) * sgn(Bn)
         double vB_ss = SM*Bn + v_ss*By_ss + w_ss*Bz_ss;
         double EL_ss = EL_s - sqrtRhoLs * (vBLs - vB_ss) * sgn_Bn;
         double ER_ss = ER_s + sqrtRhoRs * (vBRs - vB_ss) * sgn_Bn;
@@ -456,31 +417,30 @@ inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, do
         std::vector<double> UL_ss = make_U_ss(rhoL_star, EL_ss);
         std::vector<double> UR_ss = make_U_ss(rhoR_star, ER_ss);
 
-        // 通量分支(六種情況)
+        // Six-region flux selection
         std::vector<double> F(NVAR);
         if (SLs >= 0.0) {
-            // 0 落在 S_L 與 S_L* 之間,使用左 star 通量
-            // F_L* = F_L + S_L*(U_L* - U_L)
+            // Region between SL and SL*: left star flux
+            // F_L* = F_L + SL*(U_L* - U_L)
             for (int i = 0; i < NVAR; ++i)
                 F[i] = FL[i] + SL * (UL_s[i] - UL[i]);
         } else if (SM >= 0.0) {
-            // 0 落在 S_L* 與 S_M 之間,使用左 double-star 通量
-            // F_L** = F_L + S_L*(U_L* - U_L) + S_L**(U_L** - U_L*)
+            // Region between SL* and SM: left double-star flux
+            // F_L** = F_L + SL*(U_L*-U_L) + SL**(U_L**-U_L*)
             for (int i = 0; i < NVAR; ++i)
                 F[i] = FL[i] + SL * (UL_s[i] - UL[i]) + SLs * (UL_ss[i] - UL_s[i]);
         } else if (SRs >= 0.0) {
-            // 0 落在 S_M 與 S_R* 之間,使用右 double-star 通量
+            // Region between SM and SR*: right double-star flux
             for (int i = 0; i < NVAR; ++i)
                 F[i] = FR[i] + SR * (UR_s[i] - UR[i]) + SRs * (UR_ss[i] - UR_s[i]);
         } else {
-            // 0 落在 S_R* 與 S_R 之間,使用右 star 通量
+            // Region between SR* and SR: right star flux
             for (int i = 0; i < NVAR; ++i)
                 F[i] = FR[i] + SR * (UR_s[i] - UR[i]);
         }
         return F;
     } else {
-        // ---- 退化情形:Bn ~ 0,沒有阿爾文波(SL* = SM = SR*)----
-        // 退化為 HLLC-like 兩中間狀態
+        // Degenerate path: Bn ~ 0, no Alfven waves; reduce to HLLC-like two states
         std::vector<double> F(NVAR);
         if (SM >= 0.0) {
             for (int i = 0; i < NVAR; ++i)
@@ -494,19 +454,16 @@ inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, do
 }
 
 // -----------------------------------------------------------------------------
-//  對外介面:compute_flux
+//  Public interface: compute_flux
 //
-//  輸入:
-//     W_L, W_R:  左右原始變數狀態(物理 x, y, z 座標系)
-//     direction: 0 = X 方向通量,1 = Y 方向通量
-//     gamma:     絕熱指數
+//  Inputs:
+//    W_L, W_R  -- left and right primitive states in the physical (x,y,z) frame
+//    direction -- 0 = X-flux, 1 = Y-flux
+//    gamma     -- adiabatic index
 //
-//  輸出:8 分量的數值通量向量(物理座標系)
+//  Output: 8-component numerical flux vector in the physical frame
 //
-//  做法:
-//     1. 把左右 state 「旋轉」到法向座標系
-//     2. 在法向座標系下執行 HLLD
-//     3. 把通量「旋轉回」物理座標系
+//  Steps: rotate to normal frame -> HLLD -> rotate flux back
 // -----------------------------------------------------------------------------
 inline std::vector<double> compute_flux(const State& W_L, const State& W_R,
                                         int direction, double gamma) {

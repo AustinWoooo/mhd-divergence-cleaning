@@ -25,7 +25,7 @@
 namespace MHD {
 
 // -----------------------------------------------------------------------------
-//  Conservative variable indices (8 components, 2.5D MHD)
+//  Conservative variable indices (9 components, 2.5D MHD)
 //    IDN       : mass density rho
 //    IM1/2/3   : momenta rho*u, rho*v, rho*w
 //    IEN       : total energy E
@@ -42,7 +42,8 @@ constexpr int IEN = 4;
 constexpr int IB1 = 5;
 constexpr int IB2 = 6;
 constexpr int IB3 = 7;
-constexpr int NVAR = 8;
+constexpr int IPSI = 8;
+constexpr int NVAR = 9;
 
 // Small floor to guard against division by zero
 constexpr double TINY_NUMBER = 1.0e-20;
@@ -58,16 +59,17 @@ struct State {
     double u, v, w;
     double p;
     double Bx, By, Bz;
+    double psi;  // GLM divergence-cleaning scalar
 
-    State() : rho(0), u(0), v(0), w(0), p(0), Bx(0), By(0), Bz(0) {}
+    State() : rho(0), u(0), v(0), w(0), p(0), Bx(0), By(0), Bz(0), psi(0) {}
 
     State(double r, double uu, double vv, double ww,
-          double pp, double bx, double by, double bz)
-        : rho(r), u(uu), v(vv), w(ww), p(pp), Bx(bx), By(by), Bz(bz) {}
+          double pp, double bx, double by, double bz, double ps = 0.0)
+        : rho(r), u(uu), v(vv), w(ww), p(pp), Bx(bx), By(by), Bz(bz), psi(ps) {}
 
     // -------------------------------------------------------------------------
     //  Primitive -> conserved
-    //  U = [rho, rho*u, rho*v, rho*w, E, Bx, By, Bz]
+    //  U = [rho, rho*u, rho*v, rho*w, E, Bx, By, Bz, psi]
     //  E = p/(gamma-1)  +  (1/2)*rho*|v|^2  +  (1/2)*|B|^2
     //      thermal          kinetic              magnetic
     // -------------------------------------------------------------------------
@@ -83,6 +85,7 @@ struct State {
         U[IB1] = Bx;
         U[IB2] = By;
         U[IB3] = Bz;
+        U[IPSI] = psi;
         return U;
     }
 
@@ -103,6 +106,7 @@ struct State {
         double ke = 0.5 * W.rho * (W.u*W.u + W.v*W.v + W.w*W.w);
         double me = 0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);
         W.p = (gamma - 1.0) * (U[IEN] - ke - me);
+        W.psi = U[IPSI];
         return W;
     }
 };
@@ -149,6 +153,7 @@ inline std::vector<double> rotate_flux_back(const std::vector<double>& F, int di
         Fb[IB1] = F[IB3];
         Fb[IB2] = F[IB1];
         Fb[IB3] = F[IB2];
+        Fb[IPSI] = F[IPSI];
         return Fb;
     }
 }
@@ -205,6 +210,7 @@ inline std::vector<double> physical_flux(const State& W, double gamma) {
     F[IB1] = 0.0;
     F[IB2] = W.By * W.u - W.Bx * W.v;
     F[IB3] = W.Bz * W.u - W.Bx * W.w;
+    F[IPSI] = 0.0;  // GLM flux for psi is zero in the normal direction
     return F;
 }
 
@@ -438,6 +444,7 @@ inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, do
             for (int i = 0; i < NVAR; ++i)
                 F[i] = FR[i] + SR * (UR_s[i] - UR[i]);
         }
+        F[IPSI] = 0.0;
         return F;
     } else {
         // Degenerate path: Bn ~ 0, no Alfven waves; reduce to HLLC-like two states
@@ -449,6 +456,7 @@ inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, do
             for (int i = 0; i < NVAR; ++i)
                 F[i] = FR[i] + SR * (UR_s[i] - UR[i]);
         }
+        F[IPSI] = 0.0;
         return F;
     }
 }

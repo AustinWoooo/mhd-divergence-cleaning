@@ -56,7 +56,7 @@ static void print_flux(const std::string& title, const std::vector<double>& F)
 {
     const std::vector<std::string> labels = {
         "F[rho]   ", "F[rho*u] ", "F[rho*v] ", "F[rho*w] ",
-        "F[E]     ", "F[Bx]    ", "F[By]    ", "F[Bz]    "
+        "F[E]     ", "F[Bx]    ", "F[By]    ", "F[Bz]    ", "F[psi]   "
     };
     std::cout << "\n  -- " << title << " --\n";
     std::cout << std::scientific << std::setprecision(8);

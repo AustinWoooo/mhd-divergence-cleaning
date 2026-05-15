@@ -77,6 +77,7 @@ add_library(glm2d
     src/glm2d.cpp
     src/glm2d_common.cpp
     src/parabolic2d.cpp
+    src/projection2d.cpp
 )
 
 target_link_libraries(glm2d

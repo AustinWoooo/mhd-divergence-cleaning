@@ -1,6 +1,7 @@
 #include "glm2d.hpp"
 #include "glm2d_common.hpp"
 #include "parabolic2d.hpp"
+#include "projection2d.hpp"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>

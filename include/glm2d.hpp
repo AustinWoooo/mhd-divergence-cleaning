@@ -21,18 +21,44 @@ struct GLM2DParams {
     double t_end = 0.5;
     double cfl = 0.25;
 
+    // GLM wave speed and damping parameter.
+    //
+    // Hyperbolic GLM:
+    //   divB errors are transported with speed ch.
+    //
+    // Mixed GLM:
+    //   psi is additionally damped by
+    //   exp[-dt * ch^2 / cp^2].
     double ch = 1.0;
     double cp = 0.2;
 
-    // For Powell-source toy model.
+    // Velocity used only by the standalone Powell-source toy model.
+    // This is not the full Powell 8-wave MHD system.
     double powell_vx = 1.0;
     double powell_vy = 0.5;
 
     // Elliptic projection settings.
-    int poisson_max_iter = 10000;
-    double poisson_tol = 1.0e-10;
+    //
+    // The projection implemented in glm2d.cpp uses a finite-volume-compatible
+    // discrete divergence/gradient pair:
+    //
+    //   div_fv(B)_ij =
+    //       (Bx_ij - Bx_{i-1,j}) / dx
+    //     + (By_ij - By_{i,j-1}) / dy
+    //
+    //   Bx_ij <- Bx_ij - (phi_{i+1,j} - phi_ij) / dx
+    //   By_ij <- By_ij - (phi_{i,j+1} - phi_ij) / dy
+    //
+    // With the 5-point Poisson operator, this makes
+    //
+    //   div_fv(B - grad_fv phi) = div_fv(B) - Laplacian_5pt(phi).
+    int poisson_max_iter = 50000;
+    double poisson_tol = 1.0e-12;
+    double poisson_omega = 1.7;  // SOR parameter, must satisfy 0 < omega < 2.
 
     bool write_snapshot = true;
+    bool write_initial_snapshot = false;
+
     std::string out_prefix = "glm_2d";
 };
 

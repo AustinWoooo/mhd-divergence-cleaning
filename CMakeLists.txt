@@ -74,8 +74,8 @@ add_library(diagnostics
 # ============================================================
 
 add_library(glm2d
-    include/glm2d.hpp
     src/glm2d.cpp
+    src/glm2d_common.cpp
 )
 
 target_link_libraries(glm2d

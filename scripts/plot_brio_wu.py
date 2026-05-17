@@ -27,9 +27,9 @@ from pathlib import Path
 
 
 CSV_FILES = {
-    "reference": "results/brio_wu_reference.csv",
-    "noGLM":     "results/brio_wu_noGLM.csv",
-    "GLM":       "results/brio_wu_GLM.csv",
+    "reference": "results/brio_wu/brio_wu_reference.csv",
+    "noGLM":     "results/brio_wu/brio_wu_noGLM.csv",
+    "GLM":       "results/brio_wu/brio_wu_GLM.csv",
 }
 
 

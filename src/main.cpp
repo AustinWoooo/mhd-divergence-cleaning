@@ -161,9 +161,9 @@ int main()
 
     struct Run { std::string label, file; SimConfig cfg; };
     std::vector<Run> runs = {
-        {"Reference (clean IC)",       "results/brio_wu_reference.csv", {false, false, ch}},
-        {"No GLM  (div-B perturbed)",  "results/brio_wu_noGLM.csv",     {true,  false, ch}},
-        {"With GLM (div-B perturbed)", "results/brio_wu_GLM.csv",       {true,  true,  ch}},
+        {"Reference (clean IC)",       "results/brio_wu/brio_wu_reference.csv", {false, false, ch}},
+        {"No GLM  (div-B perturbed)",  "results/brio_wu/brio_wu_noGLM.csv",     {true,  false, ch}},
+        {"With GLM (div-B perturbed)", "results/brio_wu/brio_wu_GLM.csv",       {true,  true,  ch}},
     };
 
     for (auto& r : runs) {

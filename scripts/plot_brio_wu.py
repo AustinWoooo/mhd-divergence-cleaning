@@ -196,7 +196,7 @@ def main():
     fig, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True)
     fig.suptitle(
         r"Brio-Wu Shock Tube  ($\gamma = 2$,  $N = 400$,  $t = 0.1$)"
-        "\n1-D Ideal MHD — HLL Riemann Solver",
+        "\n1-D Ideal MHD — HLLD Riemann Solver",
         fontsize=12)
 
     plot_vars = [

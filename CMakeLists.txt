@@ -21,10 +21,22 @@ add_library(hlld
 
 add_executable(brio_wu
     src/main.cpp
-    tests/Brio-Wu_Shock_Tube.cpp
 )
 
 target_link_libraries(brio_wu
+    hlld
+)
+
+# ============================================================
+# HLLD unit tests (5 Riemann test cases)
+# ============================================================
+
+add_executable(hlld_tests
+    tests/hlld_test_main.cpp
+    tests/Brio-Wu_Shock_Tube.cpp
+)
+
+target_link_libraries(hlld_tests
     hlld
 )
 

@@ -61,3 +61,15 @@ add_executable(test_glm_2d
 target_link_libraries(test_glm_2d
     glm2d
 )
+
+# ============================================================
+# 1D MHD with GLM divergence cleaning (A/B test executable)
+# ============================================================
+
+add_executable(main_glm
+    src/main_glm.cpp
+)
+
+target_link_libraries(main_glm
+    glm
+)

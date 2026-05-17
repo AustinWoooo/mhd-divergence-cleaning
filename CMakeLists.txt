@@ -41,6 +41,18 @@ target_link_libraries(hlld_tests
 )
 
 # ============================================================
+# Orszag-Tang Vortex 2D test executable
+# ============================================================
+
+add_executable(orszag_tang
+    src/orszag_tang.cpp
+)
+
+target_link_libraries(orszag_tang
+    hlld
+)
+
+# ============================================================
 # 1D GLM core library
 # ============================================================
 

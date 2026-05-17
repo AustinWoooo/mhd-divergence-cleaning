@@ -22,54 +22,51 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "state.hpp"
+
 namespace MHD {
 
 // -----------------------------------------------------------------------------
-//  Conservative variable indices (9 components, 2.5D MHD)
-//    IDN       : mass density rho
-//    IM1/2/3   : momenta rho*u, rho*v, rho*w
-//    IEN       : total energy E
-//    IB1/2/3   : magnetic field Bx, By, Bz
+//  Conservative variable index aliases
+//  Mirror the canonical Var enum from state.hpp so that the HLLD flux vector
+//  layout matches the rest of the codebase.
 //
 //  Convention: after rotating to the normal frame, index "1" always holds
 //  the normal component and "2","3" hold the two tangential components.
 // -----------------------------------------------------------------------------
-constexpr int IDN = 0;
-constexpr int IM1 = 1;
-constexpr int IM2 = 2;
-constexpr int IM3 = 3;
-constexpr int IEN = 4;
-constexpr int IB1 = 5;
-constexpr int IB2 = 6;
-constexpr int IB3 = 7;
-constexpr int IPSI = 8;
-constexpr int NVAR = 9;
-
-// Small floor to guard against division by zero
-constexpr double TINY_NUMBER = 1.0e-20;
+constexpr int IDN  = RHO;
+constexpr int IM1  = MX;
+constexpr int IM2  = MY;
+constexpr int IM3  = MZ;
+constexpr int IB1  = BX;
+constexpr int IB2  = BY;
+constexpr int IB3  = BZ;
+constexpr int IEN  = E;
+constexpr int IPSI = PSI;
 
 // -----------------------------------------------------------------------------
-//  State -- primitive variables W = [rho, u, v, w, p, Bx, By, Bz]
+//  PrimState -- primitive variables W = [rho, u, v, w, p, Bx, By, Bz, psi]
 //
 //  u/v/w and Bx/By/Bz are in the physical (x,y,z) frame on input/output.
 //  Inside the solver they are temporarily rotated to the normal frame.
+//  Distinct from ::State (conserved variable array defined in state.hpp).
 // -----------------------------------------------------------------------------
-struct State {
+struct PrimState {
     double rho;
     double u, v, w;
     double p;
     double Bx, By, Bz;
-    double psi;  // GLM divergence-cleaning scalar
+    double psi;
 
-    State() : rho(0), u(0), v(0), w(0), p(0), Bx(0), By(0), Bz(0), psi(0) {}
+    PrimState() : rho(0), u(0), v(0), w(0), p(0), Bx(0), By(0), Bz(0), psi(0) {}
 
-    State(double r, double uu, double vv, double ww,
-          double pp, double bx, double by, double bz, double ps = 0.0)
+    PrimState(double r, double uu, double vv, double ww,
+              double pp, double bx, double by, double bz, double ps = 0.0)
         : rho(r), u(uu), v(vv), w(ww), p(pp), Bx(bx), By(by), Bz(bz), psi(ps) {}
 
     // -------------------------------------------------------------------------
     //  Primitive -> conserved
-    //  U = [rho, rho*u, rho*v, rho*w, E, Bx, By, Bz, psi]
+    //  U = [rho, rho*u, rho*v, rho*w, Bx, By, Bz, E, psi]
     //  E = p/(gamma-1)  +  (1/2)*rho*|v|^2  +  (1/2)*|B|^2
     //      thermal          kinetic              magnetic
     // -------------------------------------------------------------------------
@@ -93,8 +90,8 @@ struct State {
     //  Conserved -> primitive
     //  p = (gamma-1) * (E - kinetic - magnetic)
     // -------------------------------------------------------------------------
-    static State from_conserved(const std::vector<double>& U, double gamma) {
-        State W;
+    static PrimState from_conserved(const std::vector<double>& U, double gamma) {
+        PrimState W;
         W.rho = U[IDN];
         double inv_rho = 1.0 / std::max(W.rho, TINY_NUMBER);
         W.u  = U[IM1] * inv_rho;
@@ -122,13 +119,13 @@ struct State {
 //  This lets a single HLLD kernel handle both directions; the normal component
 //  is always in slot "1" after rotation.
 // -----------------------------------------------------------------------------
-inline State rotate_to_normal(const State& W, int direction) {
+inline PrimState rotate_to_normal(const PrimState& W, int direction) {
     if (direction == 0) {
         // X-direction: no rotation needed
         return W;
     } else {
         // Y-direction: move Y component into the normal (slot-1) position
-        State Wr = W;
+        PrimState Wr = W;
         Wr.u  = W.v;   Wr.v  = W.w;   Wr.w  = W.u;
         Wr.Bx = W.By;  Wr.By = W.Bz;  Wr.Bz = W.Bx;
         return Wr;
@@ -171,7 +168,7 @@ inline std::vector<double> rotate_flux_back(const std::vector<double>& F, int di
 //  The discriminant is non-negative in exact arithmetic; clamp to 0 to guard
 //  against tiny negative values from floating-point rounding.
 // -----------------------------------------------------------------------------
-inline double fast_magnetosonic_speed(const State& W, double gamma) {
+inline double fast_magnetosonic_speed(const PrimState& W, double gamma) {
     double rho = std::max(W.rho, TINY_NUMBER);
     double a2  = gamma * W.p / rho;                              // sound speed^2
     double b2  = (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz) / rho;   // total Alfven speed^2
@@ -195,18 +192,18 @@ inline double fast_magnetosonic_speed(const State& W, double gamma) {
 //  F_B2   = By*u - Bx*v                  (induction, tangential 1)
 //  F_B3   = Bz*u - Bx*w                  (induction, tangential 2)
 // -----------------------------------------------------------------------------
-inline std::vector<double> physical_flux(const State& W, double gamma) {
+inline std::vector<double> physical_flux(const PrimState& W, double gamma) {
     std::vector<double> F(NVAR);
     double pmag = 0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);
     double ptot = W.p + pmag;                                    // total pressure
     double vdotB = W.u*W.Bx + W.v*W.By + W.w*W.Bz;
-    double E = W.p/(gamma-1.0) + 0.5*W.rho*(W.u*W.u+W.v*W.v+W.w*W.w) + pmag;
+    double Etot = W.p/(gamma-1.0) + 0.5*W.rho*(W.u*W.u+W.v*W.v+W.w*W.w) + pmag;
 
     F[IDN] = W.rho * W.u;
     F[IM1] = W.rho * W.u * W.u + ptot - W.Bx * W.Bx;
     F[IM2] = W.rho * W.u * W.v - W.Bx * W.By;
     F[IM3] = W.rho * W.u * W.w - W.Bx * W.Bz;
-    F[IEN] = (E + ptot) * W.u - W.Bx * vdotB;
+    F[IEN] = (Etot + ptot) * W.u - W.Bx * vdotB;
     F[IB1] = 0.0;
     F[IB2] = W.By * W.u - W.Bx * W.v;
     F[IB3] = W.Bz * W.u - W.Bx * W.w;
@@ -272,13 +269,13 @@ inline std::vector<double> physical_flux(const State& W, double gamma) {
 //  Degenerate case (Bn ~ 0): no Alfven waves; SL* = SM = SR*; the double-star
 //  region vanishes and HLLD reduces to an HLLC-like two-intermediate-state solver.
 // -----------------------------------------------------------------------------
-inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, double gamma) {
+inline std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
     // Step 0: enforce a unique normal B at the interface (average L and R).
     // With CT/GLM Bn would already be uniquely defined; the average is the
     // correct fallback when no divergence-cleaning is applied.
     double Bn = 0.5 * (WL.Bx + WR.Bx);
-    State L = WL; L.Bx = Bn;
-    State R = WR; R.Bx = Bn;
+    PrimState L = WL; L.Bx = Bn;
+    PrimState R = WR; R.Bx = Bn;
     double Bn2 = Bn * Bn;
 
     // Step 1: fast-wave speed estimates (Davis)
@@ -328,7 +325,7 @@ inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, do
     //   denom = rho*(S-u)*(S-SM) - Bn^2
     //   When denom -> 0 (Alfven resonance or Bn = 0), tangential components
     //   are continuous across the wave and pass through unchanged.
-    auto compute_star_tangential = [&](const State& W, double S, double sMu,
+    auto compute_star_tangential = [&](const PrimState& W, double S, double sMu,
                                        double& vs, double& ws,
                                        double& Bys, double& Bzs) {
         double denom = W.rho * sMu * (S - SM) - Bn2;
@@ -473,13 +470,13 @@ inline std::vector<double> hlld_flux_normal(const State& WL, const State& WR, do
 //
 //  Steps: rotate to normal frame -> HLLD -> rotate flux back
 // -----------------------------------------------------------------------------
-inline std::vector<double> compute_flux(const State& W_L, const State& W_R,
+inline std::vector<double> compute_flux(const PrimState& W_L, const PrimState& W_R,
                                         int direction, double gamma) {
     if (direction != 0 && direction != 1) {
         throw std::invalid_argument("direction must be 0 (X) or 1 (Y)");
     }
-    State L_rot = rotate_to_normal(W_L, direction);
-    State R_rot = rotate_to_normal(W_R, direction);
+    PrimState L_rot = rotate_to_normal(W_L, direction);
+    PrimState R_rot = rotate_to_normal(W_R, direction);
     std::vector<double> F_rot = hlld_flux_normal(L_rot, R_rot, gamma);
     return rotate_flux_back(F_rot, direction);
 }

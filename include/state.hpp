@@ -1,6 +1,8 @@
 #pragma once
 #include <array>
 
+// Conservative variable layout (2.5D MHD, 9 components)
+// Ordering: density, momenta, magnetic field, energy, GLM scalar
 enum Var {
     RHO = 0,
     MX,
@@ -15,6 +17,9 @@ enum Var {
 };
 
 using State = std::array<double, NVAR>;
+
+// Floor value used to guard against division by zero across all solvers
+constexpr double TINY_NUMBER = 1.0e-20;
 
 enum class CleaningType {
     NONE,

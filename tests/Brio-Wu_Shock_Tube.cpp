@@ -56,7 +56,7 @@ static void print_flux(const std::string& title, const std::vector<double>& F)
 {
     const std::vector<std::string> labels = {
         "F[rho]   ", "F[rho*u] ", "F[rho*v] ", "F[rho*w] ",
-        "F[E]     ", "F[Bx]    ", "F[By]    ", "F[Bz]    ", "F[psi]   "
+        "F[Bx]    ", "F[By]    ", "F[Bz]    ", "F[E]     ", "F[psi]   "
     };
     std::cout << "\n  -- " << title << " --\n";
     std::cout << std::scientific << std::setprecision(8);
@@ -65,7 +65,7 @@ static void print_flux(const std::string& title, const std::vector<double>& F)
 }
 
 // Print a primitive state on one line.
-static void print_state(const std::string& side, const State& W)
+static void print_state(const std::string& side, const PrimState& W)
 {
     std::cout << std::fixed << std::setprecision(4);
     std::cout << "  " << side
@@ -107,8 +107,8 @@ static void case1_brio_wu_x(double gamma)
     std::cout << " Reference: Brio & Wu (1988), gamma = " << gamma << "\n";
     std::cout << "========================================\n";
 
-    State WL(1.0,   0.0, 0.0, 0.0,  1.0,  0.75,  1.0, 0.0);
-    State WR(0.125, 0.0, 0.0, 0.0,  0.1,  0.75, -1.0, 0.0);
+    PrimState WL(1.0,   0.0, 0.0, 0.0,  1.0,  0.75,  1.0, 0.0);
+    PrimState WR(0.125, 0.0, 0.0, 0.0,  0.1,  0.75, -1.0, 0.0);
 
     print_state("L", WL);
     print_state("R", WR);
@@ -148,8 +148,8 @@ static void case2_rotation_y(double gamma)
     // Left  rotated : v=0, u=0, By=0.75, Bx=-1.0  (By of right ↔ Bx of left)
     // A cleaner way: flip the sign of Bx for the left state so that
     // after the Y-rotation the interface sees the same normal-B (0.75) as Case 1.
-    State WL(1.0,   0.0, 0.0, 0.0,  1.0, -1.0, 0.75, 0.0);
-    State WR(0.125, 0.0, 0.0, 0.0,  0.1,  1.0, 0.75, 0.0);
+    PrimState WL(1.0,   0.0, 0.0, 0.0,  1.0, -1.0, 0.75, 0.0);
+    PrimState WR(0.125, 0.0, 0.0, 0.0,  0.1,  1.0, 0.75, 0.0);
 
     print_state("L", WL);
     print_state("R", WR);
@@ -157,8 +157,8 @@ static void case2_rotation_y(double gamma)
     auto F  = compute_flux(WL, WR, /*direction=*/1, gamma);
 
     // Also run Case 1 to get the reference F[rho] for comparison.
-    State WL1(1.0,   0.0, 0.0, 0.0,  1.0,  0.75,  1.0, 0.0);
-    State WR1(0.125, 0.0, 0.0, 0.0,  0.1,  0.75, -1.0, 0.0);
+    PrimState WL1(1.0,   0.0, 0.0, 0.0,  1.0,  0.75,  1.0, 0.0);
+    PrimState WR1(0.125, 0.0, 0.0, 0.0,  0.1,  0.75, -1.0, 0.0);
     auto  F1 = compute_flux(WL1, WR1, /*direction=*/0, gamma);
 
     print_flux("HLLD Numerical Flux (Y)", F);
@@ -190,8 +190,8 @@ static void case3_supersonic(double gamma)
     std::cout << " SL >= 0 path — HLLD must return F_L, F[rho] = 10\n";
     std::cout << "========================================\n";
 
-    State WL(1.0, 10.0, 0.0, 0.0, 1.0, 0.1, 0.0, 0.0);
-    State WR(1.0, 10.0, 0.0, 0.0, 1.0, 0.1, 0.0, 0.0);
+    PrimState WL(1.0, 10.0, 0.0, 0.0, 1.0, 0.1, 0.0, 0.0);
+    PrimState WR(1.0, 10.0, 0.0, 0.0, 1.0, 0.1, 0.0, 0.0);
 
     print_state("L", WL);
     print_state("R", WR);
@@ -227,8 +227,8 @@ static void case4_degenerate_bx0(double gamma)
     std::cout << " HLLD must degrade gracefully — no NaN / Inf\n";
     std::cout << "========================================\n";
 
-    State WL(1.0,   0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0);
-    State WR(0.125, 0.0, 0.0, 0.0, 0.1, 0.0, 0.5, 0.0);
+    PrimState WL(1.0,   0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0);
+    PrimState WR(0.125, 0.0, 0.0, 0.0, 0.1, 0.0, 0.5, 0.0);
 
     print_state("L", WL);
     print_state("R", WR);
@@ -260,7 +260,7 @@ static void case5_identical_states(double gamma)
     std::cout << " HLLD flux must equal the exact physical flux F(W)\n";
     std::cout << "========================================\n";
 
-    State W(1.0, 0.5, -0.3, 0.2,  1.0,  0.4, 0.6, 0.1);
+    PrimState W(1.0, 0.5, -0.3, 0.2,  1.0,  0.4, 0.6, 0.1);
 
     print_state("L = R", W);
 

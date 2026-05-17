@@ -34,7 +34,7 @@
 //                       double gamma_general = 5.0/3.0);
 // =============================================================================
 
-#include "../include/HLLD_mhd_solver.hpp"
+#include "HLLD_mhd_solver.hpp"
 
 #include <iostream>
 #include <iomanip>

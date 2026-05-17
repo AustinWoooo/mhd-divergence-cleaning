@@ -8,6 +8,27 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include_directories(include)
 
 # ============================================================
+# HLLD solver library
+# ============================================================
+
+add_library(hlld
+    src/hlld.cpp
+)
+
+# ============================================================
+# Brio-Wu Shock Tube test executable
+# ============================================================
+
+add_executable(brio_wu
+    src/main.cpp
+    tests/Brio-Wu_Shock_Tube.cpp
+)
+
+target_link_libraries(brio_wu
+    hlld
+)
+
+# ============================================================
 # 1D GLM core library
 # ============================================================
 

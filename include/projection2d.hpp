@@ -6,7 +6,14 @@
 #include "state.hpp"
 #include "diagnostics.hpp"
 
-struct Projection2DParams {
+
+#include "glm2d.hpp"
+
+void apply_elliptic_projection_2d(
+    std::vector<State>& U,
+    const GLM2DParams& params
+);
+/*struct Projection2DParams {
     int nx = 128;
     int ny = 128;
 
@@ -42,4 +49,4 @@ void write_projection_2d_snapshot(
 
 void run_projection_2d_case(
     Projection2DParams params
-);
+);*/

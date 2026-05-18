@@ -5,6 +5,8 @@ project(mhd_divergence_cleaning LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(OpenMP REQUIRED)
+
 include_directories(include)
 
 # ============================================================
@@ -74,13 +76,17 @@ add_library(diagnostics
 # ============================================================
 
 add_library(glm2d
-    include/glm2d.hpp
     src/glm2d.cpp
+    src/glm2d_common.cpp
+    src/parabolic2d.cpp
+    src/projection2d.cpp
 )
 
 target_link_libraries(glm2d
-    glm
-    diagnostics
+    PUBLIC
+        glm
+        diagnostics
+        OpenMP::OpenMP_CXX
 )
 
 # ============================================================
@@ -92,7 +98,8 @@ add_executable(test_glm_1d
 )
 
 target_link_libraries(test_glm_1d
-    glm
+    PRIVATE
+        glm
 )
 
 # ============================================================
@@ -104,5 +111,6 @@ add_executable(test_glm_2d
 )
 
 target_link_libraries(test_glm_2d
-    glm2d
+    PRIVATE
+        glm2d
 )

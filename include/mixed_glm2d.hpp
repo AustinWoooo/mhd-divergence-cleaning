@@ -2,7 +2,8 @@
 
 #include <vector>
 
-#include "glm2d.hpp"
+#include "glm2d_types.hpp"
+#include "state.hpp"
 
 void apply_mixed_glm_damping_2d(
     std::vector<State>& U,

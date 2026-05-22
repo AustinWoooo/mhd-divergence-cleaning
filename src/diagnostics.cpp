@@ -1,4 +1,5 @@
 #include "diagnostics.hpp"
+#include "glm2d_common.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -46,9 +47,7 @@ double compute_normalized_divB_cell_2d(
     );
 
     const double dx_eff = std::min(dx, dy);
-    const double eps = 1.0e-12;
-
-    return dx_eff * std::abs(divB) / (Bmag + eps);
+    return dx_eff * std::abs(divB) / (Bmag + DIVB_NORM_EPS);
 }
 
 DivBNorms compute_divB_norms_2d(

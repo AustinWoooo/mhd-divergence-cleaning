@@ -1,4 +1,6 @@
 #include "glm2d.hpp"
+#include "diagnostics.hpp"
+#include "glm.hpp"
 #include "glm2d_common.hpp"
 #include "hyperbolic_glm2d.hpp"
 #include "mixed_glm2d.hpp"
@@ -213,8 +215,8 @@ void advance_glm_2d_one_step(
 
     if (type == CleaningType::MIXED_EGLM) {
         // In this standalone B-psi sandbox, EGLM-specific momentum and energy
-        // source terms are not active. Therefore this case reduces to the same
-        // B-psi subsystem as mixed GLM.
+        // source terms are not active. This is therefore an alias of mixed GLM
+        // here, not a full MHD EGLM implementation.
         update_mixed_glm_2d(U, params);
         return;
     }

@@ -83,9 +83,7 @@ double compute_fv_normalized_divB_cell_2d(
     );
 
     const double h = std::min(dx, dy);
-    const double eps = 1.0e-30;
-
-    return std::abs(divB) * h / (Bmag + eps);
+    return std::abs(divB) * h / (Bmag + DIVB_NORM_EPS);
 }
 
 LocalDivBNorms compute_fv_divB_norms_2d(

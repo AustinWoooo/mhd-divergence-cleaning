@@ -3,8 +3,13 @@
 #include <string>
 #include <vector>
 
-#include "diagnostics.hpp"
 #include "state.hpp"
+
+constexpr double DIVB_NORM_EPS = 1.0e-12;
+
+inline int idx2d(int i, int j, int nx) {
+    return j * nx + i;
+}
 
 int periodic_index(int i, int n);
 

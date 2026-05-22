@@ -1,13 +1,18 @@
 #include "glm2d.hpp"
+#include "diagnostics.hpp"
+#include "glm.hpp"
 #include "glm2d_common.hpp"
+#include "hyperbolic_glm2d.hpp"
+#include "mixed_glm2d.hpp"
 #include "parabolic2d.hpp"
+#include "powell2d.hpp"
 #include "projection2d.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -15,10 +20,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-
-
-
-
 
 void validate_glm_2d_params(const GLM2DParams& params) {
     if (params.nx < 4 || params.ny < 4) {
@@ -58,48 +59,6 @@ void validate_glm_2d_params(const GLM2DParams& params) {
     }
 }
 
-
-
-// Finite-volume-compatible divergence.
-//
-// This is the divergence operator used by the elliptic projection and parabolic
-// cleaning in this file. It is intentionally different from a centered derivative:
-//
-//   div_fv(B)_ij =
-//       (Bx_ij - Bx_{i-1,j}) / dx
-//     + (By_ij - By_{i,j-1}) / dy
-//
-// With the forward gradient
-//
-//   grad_x(phi)_ij = (phi_{i+1,j} - phi_ij) / dx,
-//   grad_y(phi)_ij = (phi_{i,j+1} - phi_ij) / dy,
-//
-// we get exactly
-//
-//   div_fv(grad_fv phi) = Laplacian_5pt(phi).
-
-
-
-
-
-
-
-
-void subtract_mean(std::vector<double>& a) {
-    if (a.empty()) return;
-
-    double mean = 0.0;
-    for (double x : a) {
-        mean += x;
-    }
-
-    mean /= static_cast<double>(a.size());
-
-    for (double& x : a) {
-        x -= mean;
-    }
-}
-
 double compute_glm_2d_timestep(
     CleaningType type,
     const GLM2DParams& params
@@ -131,78 +90,6 @@ double compute_glm_2d_timestep(
     //
     // This is safer than dt = C * min(dx,dy) / ch for a 2D unsplit update.
     return params.cfl / (params.ch * (inv_dx + inv_dy));
-}
-
-std::vector<double> solve_periodic_poisson_sor_5pt(
-    const std::vector<double>& rhs_input,
-    const GLM2DParams& params
-) {
-    const int nx = params.nx;
-    const int ny = params.ny;
-
-    const double dx = params.dx;
-    const double dy = params.dy;
-
-    const double inv_dx2 = 1.0 / (dx * dx);
-    const double inv_dy2 = 1.0 / (dy * dy);
-    const double denom = 2.0 * (inv_dx2 + inv_dy2);
-
-    std::vector<double> rhs = rhs_input;
-    std::vector<double> phi(nx * ny, 0.0);
-
-    // Periodic Poisson equation requires zero-mean RHS.
-    subtract_mean(rhs);
-
-    double max_update = std::numeric_limits<double>::infinity();
-
-    for (int iter = 0; iter < params.poisson_max_iter; ++iter) {
-        max_update = 0.0;
-
-        for (int j = 0; j < ny; ++j) {
-            const int jp = periodic_index(j + 1, ny);
-            const int jm = periodic_index(j - 1, ny);
-
-            for (int i = 0; i < nx; ++i) {
-                const int ip = periodic_index(i + 1, nx);
-                const int im = periodic_index(i - 1, nx);
-
-                const int id = idx2d(i, j, nx);
-
-                const double jacobi_value =
-                    (
-                        (phi[idx2d(ip, j, nx)] + phi[idx2d(im, j, nx)]) * inv_dx2
-                      + (phi[idx2d(i, jp, nx)] + phi[idx2d(i, jm, nx)]) * inv_dy2
-                      - rhs[id]
-                    ) / denom;
-
-                const double old_value = phi[id];
-
-                const double new_value =
-                    (1.0 - params.poisson_omega) * old_value
-                  + params.poisson_omega * jacobi_value;
-
-                phi[id] = new_value;
-
-                max_update = std::max(
-                    max_update,
-                    std::abs(new_value - old_value)
-                );
-            }
-        }
-
-        // Remove the arbitrary constant mode from time to time.
-        if (iter % 50 == 0) {
-            subtract_mean(phi);
-        }
-
-        if (max_update < params.poisson_tol) {
-            break;
-        }
-    }
-
-    subtract_mean(phi);
-
-    return phi;
 }
 
 } // namespace
@@ -292,215 +179,6 @@ void initialize_divergence_pulse_2d(
     }
 }
 
-void update_hyperbolic_glm_2d(
-    std::vector<State>& U,
-    const GLM2DParams& params
-) {
-    const int nx = params.nx;
-    const int ny = params.ny;
-
-    const double dx = params.dx;
-    const double dy = params.dy;
-    const double dt = params.dt;
-    const double ch = params.ch;
-
-    std::vector<GLMFlux> flux_x((nx + 1) * ny);
-    std::vector<GLMFlux> flux_y(nx * (ny + 1));
-
-    auto fx_id = [nx](int iface, int j) {
-        return j * (nx + 1) + iface;
-    };
-
-    auto fy_id = [nx](int i, int jface) {
-        return jface * nx + i;
-    };
-
-    // x-direction GLM subsystem:
-    //
-    //   d/dt [Bx, psi]^T + d/dx [psi, ch^2 Bx]^T = 0.
-    //
-    // The characteristic speeds are +/- ch. compute_hyperbolic_glm_flux()
-    // should return the Rusanov flux for this 2-variable subsystem.
-    for (int j = 0; j < ny; ++j) {
-        for (int iface = 0; iface <= nx; ++iface) {
-            const int iL = periodic_index(iface - 1, nx);
-            const int iR = periodic_index(iface,     nx);
-
-            const State& UL = U[idx2d(iL, j, nx)];
-            const State& UR = U[idx2d(iR, j, nx)];
-
-            flux_x[fx_id(iface, j)] =
-                compute_hyperbolic_glm_flux(
-                    UL[BX], UL[PSI],
-                    UR[BX], UR[PSI],
-                    ch
-                );
-        }
-    }
-
-    // y-direction GLM subsystem:
-    //
-    //   d/dt [By, psi]^T + d/dy [psi, ch^2 By]^T = 0.
-    for (int jface = 0; jface <= ny; ++jface) {
-        const int jL = periodic_index(jface - 1, ny);
-        const int jR = periodic_index(jface,     ny);
-
-        for (int i = 0; i < nx; ++i) {
-            const State& UL = U[idx2d(i, jL, nx)];
-            const State& UR = U[idx2d(i, jR, nx)];
-
-            flux_y[fy_id(i, jface)] =
-                compute_hyperbolic_glm_flux(
-                    UL[BY], UL[PSI],
-                    UR[BY], UR[PSI],
-                    ch
-                );
-        }
-    }
-
-    const std::vector<State> Uold = U;
-
-    for (int j = 0; j < ny; ++j) {
-        for (int i = 0; i < nx; ++i) {
-            const GLMFlux& fxL = flux_x[fx_id(i,     j)];
-            const GLMFlux& fxR = flux_x[fx_id(i + 1, j)];
-
-            const GLMFlux& fyL = flux_y[fy_id(i, j)];
-            const GLMFlux& fyR = flux_y[fy_id(i, j + 1)];
-
-            State cell = Uold[idx2d(i, j, nx)];
-
-            cell[BX] =
-                Uold[idx2d(i, j, nx)][BX]
-              - dt / dx * (fxR.FBn - fxL.FBn);
-
-            cell[BY] =
-                Uold[idx2d(i, j, nx)][BY]
-              - dt / dy * (fyR.FBn - fyL.FBn);
-
-            cell[PSI] =
-                Uold[idx2d(i, j, nx)][PSI]
-              - dt / dx * (fxR.Fpsi - fxL.Fpsi)
-              - dt / dy * (fyR.Fpsi - fyL.Fpsi);
-
-            U[idx2d(i, j, nx)] = cell;
-        }
-    }
-}
-
-void apply_mixed_glm_damping_2d(
-    std::vector<State>& U,
-    const GLM2DParams& params
-) {
-    const double damping_rate =
-        params.ch * params.ch / (params.cp * params.cp);
-
-    const double factor = std::exp(-params.dt * damping_rate);
-
-    for (auto& cell : U) {
-        cell[PSI] *= factor;
-    }
-}
-
-
-
-void apply_elliptic_projection_2d(
-    std::vector<State>& U,
-    const GLM2DParams& params
-) {
-    const int nx = params.nx;
-    const int ny = params.ny;
-
-    const double dx = params.dx;
-    const double dy = params.dy;
-
-    // Compatible RHS:
-    //
-    //   Laplacian_5pt(phi) = div_fv(B).
-    std::vector<double> rhs =
-        compute_fv_divB_field_2d(U, nx, ny, dx, dy);
-
-    // Periodic Poisson equation is solvable only for zero-mean RHS.
-    subtract_mean(rhs);
-
-    const std::vector<double> phi =
-        solve_periodic_poisson_sor_5pt(rhs, params);
-
-    const std::vector<State> Uold = U;
-
-    for (int j = 0; j < ny; ++j) {
-        const int jp = periodic_index(j + 1, ny);
-
-        for (int i = 0; i < nx; ++i) {
-            const int ip = periodic_index(i + 1, nx);
-
-            const int id = idx2d(i, j, nx);
-
-            const double dphi_dx =
-                (phi[idx2d(ip, j, nx)] - phi[id]) / dx;
-
-            const double dphi_dy =
-                (phi[idx2d(i, jp, nx)] - phi[id]) / dy;
-
-            State cell = Uold[id];
-
-            // Compatible projection:
-            //
-            //   B <- B - grad_fv(phi).
-            //
-            // With the div_fv operator above:
-            //
-            //   div_fv(B_new) = div_fv(B_old) - Laplacian_5pt(phi).
-            cell[BX] -= dphi_dx;
-            cell[BY] -= dphi_dy;
-
-            cell[PSI] = 0.0;
-
-            U[id] = cell;
-        }
-    }
-}
-
-void apply_powell_source_2d(
-    std::vector<State>& U,
-    const GLM2DParams& params
-) {
-    const int nx = params.nx;
-    const int ny = params.ny;
-
-    const double dx = params.dx;
-    const double dy = params.dy;
-    const double dt = params.dt;
-
-    // Standalone induction-only Powell toy model:
-    //
-    //   dB/dt = -u divB.
-    //
-    // This only demonstrates advection of divergence errors. It is NOT the full
-    // Powell 8-wave MHD system. The full system also modifies momentum and energy:
-    //
-    //   S_Powell = -(divB) [0, Bx, By, Bz, u.B, ux, uy, uz]^T
-    //
-    // for the full conservative MHD state.
-    const std::vector<double> divB =
-        compute_fv_divB_field_2d(U, nx, ny, dx, dy);
-
-    const std::vector<State> Uold = U;
-
-    for (int j = 0; j < ny; ++j) {
-        for (int i = 0; i < nx; ++i) {
-            const int id = idx2d(i, j, nx);
-
-            State cell = Uold[id];
-
-            cell[BX] -= dt * params.powell_vx * divB[id];
-            cell[BY] -= dt * params.powell_vy * divB[id];
-
-            U[id] = cell;
-        }
-    }
-}
-
 void advance_glm_2d_one_step(
     std::vector<State>& U,
     CleaningType type,
@@ -516,8 +194,7 @@ void advance_glm_2d_one_step(
     }
 
     if (type == CleaningType::MIXED_GLM) {
-        update_hyperbolic_glm_2d(U, params);
-        apply_mixed_glm_damping_2d(U, params);
+        update_mixed_glm_2d(U, params);
         return;
     }
 
@@ -538,10 +215,9 @@ void advance_glm_2d_one_step(
 
     if (type == CleaningType::MIXED_EGLM) {
         // In this standalone B-psi sandbox, EGLM-specific momentum and energy
-        // source terms are not active. Therefore this case reduces to the same
-        // B-psi subsystem as mixed GLM.
-        update_hyperbolic_glm_2d(U, params);
-        apply_mixed_glm_damping_2d(U, params);
+        // source terms are not active. This is therefore an alias of mixed GLM
+        // here, not a full MHD EGLM implementation.
+        update_mixed_glm_2d(U, params);
         return;
     }
 

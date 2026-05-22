@@ -26,7 +26,8 @@ add_executable(brio_wu
 )
 
 target_link_libraries(brio_wu
-    hlld
+    PRIVATE
+        hlld
 )
 
 # ============================================================
@@ -39,7 +40,8 @@ add_executable(hlld_tests
 )
 
 target_link_libraries(hlld_tests
-    hlld
+    PRIVATE
+        hlld
 )
 
 # ============================================================
@@ -51,7 +53,8 @@ add_executable(orszag_tang
 )
 
 target_link_libraries(orszag_tang
-    hlld
+    PRIVATE
+        hlld
 )
 
 # ============================================================
@@ -78,7 +81,10 @@ add_library(diagnostics
 add_library(glm2d
     src/glm2d.cpp
     src/glm2d_common.cpp
+    src/hyperbolic_glm2d.cpp
+    src/mixed_glm2d.cpp
     src/parabolic2d.cpp
+    src/powell2d.cpp
     src/projection2d.cpp
 )
 

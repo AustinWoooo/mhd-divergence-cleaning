@@ -10,9 +10,7 @@ namespace fs = std::filesystem;
 
 int periodic_index(int i, int n) {
     int r = i % n;
-    if (r < 0) {
-        r += n;
-    }
+    if (r < 0) r += n;
     return r;
 }
 
@@ -85,9 +83,7 @@ double compute_fv_normalized_divB_cell_2d(
     );
 
     const double h = std::min(dx, dy);
-    const double eps = 1.0e-30;
-
-    return std::abs(divB) * h / (Bmag + eps);
+    return std::abs(divB) * h / (Bmag + DIVB_NORM_EPS);
 }
 
 LocalDivBNorms compute_fv_divB_norms_2d(
@@ -117,16 +113,16 @@ LocalDivBNorms compute_fv_divB_norms_2d(
             const double normDivB =
                 compute_fv_normalized_divB_cell_2d(U, nx, ny, i, j, dx, dy);
 
-            const double abs_divB = std::abs(divB);
-            const double abs_normDivB = std::abs(normDivB);
+            const double a = std::abs(divB);
+            const double an = std::abs(normDivB);
 
-            sum_abs += abs_divB;
+            sum_abs += a;
             sum_sq += divB * divB;
-            max_abs = std::max(max_abs, abs_divB);
+            max_abs = std::max(max_abs, a);
 
-            sum_abs_norm += abs_normDivB;
+            sum_abs_norm += an;
             sum_sq_norm += normDivB * normDivB;
-            max_abs_norm = std::max(max_abs_norm, abs_normDivB);
+            max_abs_norm = std::max(max_abs_norm, an);
         }
     }
 

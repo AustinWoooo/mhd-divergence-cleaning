@@ -15,10 +15,6 @@ struct DivBNorms {
     double Linf_norm = 0.0;
 };
 
-inline int idx2d(int i, int j, int nx) {
-    return j * nx + i;
-}
-
 double compute_divB_cell_2d(
     const std::vector<State>& U,
     int nx,

@@ -31,6 +31,12 @@ add_library(diagnostics
 add_library(glm2d
     include/glm2d.hpp
     src/glm2d.cpp
+    src/glm2d_common.cpp
+    src/hyperbolic_glm2d.cpp
+    src/mixed_glm2d.cpp
+    src/parabolic2d.cpp
+    src/powell2d.cpp
+    src/projection2d.cpp
 )
 
 target_link_libraries(glm2d

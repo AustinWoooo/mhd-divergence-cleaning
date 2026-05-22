@@ -4,8 +4,7 @@
 
 #include "glm2d.hpp"
 
-// Elliptic projection for the standalone 2D divergence-cleaning framework.
-void apply_elliptic_projection_2d(
+void apply_parabolic_cleaning_2d(
     std::vector<State>& U,
     const GLM2DParams& params
 );

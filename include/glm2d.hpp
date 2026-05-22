@@ -39,7 +39,7 @@ struct GLM2DParams {
 
     // Elliptic projection settings.
     //
-    // The projection implemented in glm2d.cpp uses a finite-volume-compatible
+    // The projection implemented in projection2d.cpp uses a finite-volume-compatible
     // discrete divergence/gradient pair:
     //
     //   div_fv(B)_ij =

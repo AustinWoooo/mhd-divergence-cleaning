@@ -53,16 +53,24 @@ def main():
 
     plt.figure(figsize=(7, 5))
 
+    metric_cols = []
+
     for file, label in zip(args.files, labels):
         df = pd.read_csv(file)
         time_col = pick_time_column(df)
         metric_col = pick_metric_column(df, args.metric)
+        metric_cols.append(metric_col)
+
+        print(f"{label}: using time={time_col}, metric={metric_col}")
 
         plt.plot(df[time_col], df[metric_col], label=label)
 
+    selected_metrics = set(metric_cols)
+    ylabel_metric = metric_cols[0] if len(selected_metrics) == 1 else args.metric
+
     plt.yscale("log")
     plt.xlabel("time")
-    plt.ylabel(rf"${args.metric}(\nabla\cdot\mathbf{{B}})$")
+    plt.ylabel(f"{ylabel_metric}(divB)")
     plt.grid(alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -76,4 +84,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -27,7 +27,8 @@ enum class CleaningType {
     HYPERBOLIC_GLM,
     MIXED_GLM,
     ELLIPTIC_PROJECTION,
-    // Standalone induction-only Powell-like source, not full 8-wave MHD Powell.
+    // Full operator-split Powell 8-wave source for 2.5D MHD.
+    // Non-conservative; transports divB errors with local fluid velocity.
     POWELL_SOURCE,
     // In the standalone B-psi sandbox this reduces to MIXED_GLM behavior.
     MIXED_EGLM

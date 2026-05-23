@@ -87,6 +87,7 @@ add_library(glm2d
     src/powell2d.cpp
     src/projection2d.cpp
     src/eglm2d.cpp
+    src/galilean_glm2d.cpp
 )
 
 target_link_libraries(glm2d

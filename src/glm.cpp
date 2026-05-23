@@ -27,7 +27,8 @@ void add_glm_flux_correction(
     if (
         params.type != CleaningType::HYPERBOLIC_GLM &&
         params.type != CleaningType::MIXED_GLM &&
-        params.type != CleaningType::MIXED_EGLM
+        params.type != CleaningType::MIXED_EGLM &&
+        params.type != CleaningType::GI_MIXED_EGLM
     ) {
         return;
     }
@@ -62,6 +63,8 @@ std::string cleaning_name(CleaningType type) {
             return "powell_source";
         case CleaningType::MIXED_EGLM:
             return "mixed_eglm";
+        case CleaningType::GI_MIXED_EGLM:
+            return "gi_mixed_eglm";
         default:
             return "unknown";
     }

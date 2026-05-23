@@ -8,6 +8,7 @@
 #include "powell2d.hpp"
 #include "projection2d.hpp"
 #include "eglm2d.hpp"
+#include "galilean_glm2d.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -103,6 +104,7 @@ CleaningType parse_cleaning_type_2d(const std::string& name) {
     if (name == "elliptic_projection") return CleaningType::ELLIPTIC_PROJECTION;
     if (name == "powell_source") return CleaningType::POWELL_SOURCE;
     if (name == "mixed_eglm") return CleaningType::MIXED_EGLM;
+    if (name == "gi_mixed_eglm") return CleaningType::GI_MIXED_EGLM;
 
     throw std::invalid_argument("Unknown cleaning type: " + name);
 }
@@ -216,6 +218,11 @@ void advance_glm_2d_one_step(
 
     if (type == CleaningType::MIXED_EGLM) {
         update_mixed_eglm_2d(U, params);
+        return;
+    }
+
+    if (type == CleaningType::GI_MIXED_EGLM) {
+        update_gi_mixed_eglm_2d(U, params);
         return;
     }
 

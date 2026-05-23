@@ -32,5 +32,8 @@ enum class CleaningType {
     POWELL_SOURCE,
     // Mixed GLM plus EGLM momentum/energy source terms.
     // Non-conservative; distinct from Powell 8-wave source.
-    MIXED_EGLM
+    MIXED_EGLM,
+    // Experimental Galilean-invariant mixed EGLM source terms from Dedner et al.
+    // Non-conservative; includes momentum, magnetic-field, energy, and psi sources.
+    GI_MIXED_EGLM
 };

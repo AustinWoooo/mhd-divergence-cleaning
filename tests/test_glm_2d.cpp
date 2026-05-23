@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "eglm2d.hpp"
+#include "galilean_glm2d.hpp"
 #include "glm.hpp"
 #include "glm2d.hpp"
 #include "glm2d_common.hpp"
@@ -184,6 +185,79 @@ void test_powell_source_one_step() {
     std::cout << "Powell one-step source assertion passed.\n";
 }
 
+void test_gi_eglm_source_one_step() {
+    GLM2DParams params;
+    params.nx = 4;
+    params.ny = 4;
+    params.dx = 1.0;
+    params.dy = 1.0;
+    params.dt = 0.01;
+
+    const int nx = params.nx;
+    const int ny = params.ny;
+
+    std::vector<State> U(nx * ny);
+    fill_divergent_test_state(U, nx, ny);
+
+    const std::vector<State> Uold = U;
+    const std::vector<double> divB =
+        compute_fv_divB_field_2d(Uold, nx, ny, params.dx, params.dy);
+
+    apply_gi_eglm_source_2d(U, Uold, params);
+
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            const int id = idx2d(i, j, nx);
+
+            const int ip = periodic_index(i + 1, nx);
+            const int im = periodic_index(i - 1, nx);
+            const int jp = periodic_index(j + 1, ny);
+            const int jm = periodic_index(j - 1, ny);
+
+            const State& old = Uold[id];
+            const State& cell = U[id];
+
+            const double rho = old[RHO];
+            const double ux = old[MX] / rho;
+            const double uy = old[MY] / rho;
+            const double uz = old[MZ] / rho;
+
+            const double dpsidx =
+                (Uold[idx2d(ip, j, nx)][PSI] - Uold[idx2d(im, j, nx)][PSI])
+              / (2.0 * params.dx);
+
+            const double dpsidy =
+                (Uold[idx2d(i, jp, nx)][PSI] - Uold[idx2d(i, jm, nx)][PSI])
+              / (2.0 * params.dy);
+
+            const double u_dot_B =
+                ux * old[BX] + uy * old[BY] + uz * old[BZ];
+            const double B_dot_grad_psi =
+                old[BX] * dpsidx + old[BY] * dpsidy;
+            const double u_dot_grad_psi = ux * dpsidx + uy * dpsidy;
+
+            assert(approx_equal(cell[RHO], old[RHO]));
+            assert(approx_equal(cell[MX], old[MX] - params.dt * divB[id] * old[BX]));
+            assert(approx_equal(cell[MY], old[MY] - params.dt * divB[id] * old[BY]));
+            assert(approx_equal(cell[MZ], old[MZ] - params.dt * divB[id] * old[BZ]));
+            assert(approx_equal(cell[BX], old[BX] - params.dt * divB[id] * ux));
+            assert(approx_equal(cell[BY], old[BY] - params.dt * divB[id] * uy));
+            assert(approx_equal(cell[BZ], old[BZ] - params.dt * divB[id] * uz));
+            assert(approx_equal(
+                cell[E],
+                old[E] - params.dt * (divB[id] * u_dot_B + B_dot_grad_psi)
+            ));
+            assert(approx_equal(
+                cell[PSI],
+                old[PSI] - params.dt * u_dot_grad_psi
+            ));
+        }
+    }
+
+    assert_all_finite(U);
+    std::cout << "GI mixed EGLM one-step source assertion passed.\n";
+}
+
 void test_projection_reduces_fv_divB() {
     GLM2DParams params;
     params.nx = 16;
@@ -289,6 +363,7 @@ void test_mixed_glm_damping_factor() {
 int main() {
     test_eglm_source_one_step();
     test_powell_source_one_step();
+    test_gi_eglm_source_one_step();
     test_projection_reduces_fv_divB();
     test_parabolic_reduces_fv_divB();
     test_mixed_glm_damping_factor();

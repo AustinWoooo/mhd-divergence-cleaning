@@ -7,6 +7,7 @@
 #include "parabolic2d.hpp"
 #include "powell2d.hpp"
 #include "projection2d.hpp"
+#include "eglm2d.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -214,10 +215,7 @@ void advance_glm_2d_one_step(
     }
 
     if (type == CleaningType::MIXED_EGLM) {
-        // In this standalone B-psi sandbox, EGLM-specific momentum and energy
-        // source terms are not active. This is therefore an alias of mixed GLM
-        // here, not a full MHD EGLM implementation.
-        update_mixed_glm_2d(U, params);
+        update_mixed_eglm_2d(U, params);
         return;
     }
 

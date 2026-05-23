@@ -86,6 +86,7 @@ add_library(glm2d
     src/parabolic2d.cpp
     src/powell2d.cpp
     src/projection2d.cpp
+    src/eglm2d.cpp
 )
 
 target_link_libraries(glm2d

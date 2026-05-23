@@ -30,6 +30,7 @@ enum class CleaningType {
     // Full operator-split Powell 8-wave source for 2.5D MHD.
     // Non-conservative; transports divB errors with local fluid velocity.
     POWELL_SOURCE,
-    // In the standalone B-psi sandbox this reduces to MIXED_GLM behavior.
+    // Mixed GLM plus EGLM momentum/energy source terms.
+    // Non-conservative; distinct from Powell 8-wave source.
     MIXED_EGLM
 };

@@ -18,6 +18,10 @@ def pick_time_column(df):
 def pick_metric_column(df, metric):
     candidates = [
         metric,
+        f"{metric}_fv",
+        f"{metric}_centered",
+        f"{metric}_norm_fv",
+        f"{metric}_norm_centered",
         f"{metric}_divB",
         f"{metric}_divb",
     ]
@@ -26,7 +30,10 @@ def pick_metric_column(df, metric):
         if c in df.columns:
             return c
 
-    raise KeyError(f"No {metric} column found. Columns = {list(df.columns)}")
+    raise KeyError(
+        f"No compatible {metric} column found. "
+        f"Tried {candidates}. Columns = {list(df.columns)}"
+    )
 
 
 def main():

@@ -407,9 +407,9 @@ int main() {
         CleaningType::PARABOLIC,
         CleaningType::ELLIPTIC_PROJECTION,
         CleaningType::POWELL_SOURCE,
-        CleaningType::MIXED_EGLM
+        CleaningType::MIXED_EGLM,
+        CleaningType::GI_MIXED_EGLM
     };
-
     // ============================================================
     // Run all selected cases
     // ============================================================

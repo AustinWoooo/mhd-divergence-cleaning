@@ -120,7 +120,8 @@ std::vector<CleaningType> selected_cleaning_cases_2d(
             CleaningType::PARABOLIC,
             CleaningType::ELLIPTIC_PROJECTION,
             CleaningType::POWELL_SOURCE,
-            CleaningType::MIXED_EGLM
+            CleaningType::MIXED_EGLM,
+            CleaningType::GI_MIXED_EGLM
         };
     }
 

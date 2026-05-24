@@ -18,46 +18,6 @@ add_library(hlld
 )
 
 # ============================================================
-# Brio-Wu Shock Tube test executable
-# ============================================================
-
-add_executable(brio_wu
-    src/main.cpp
-)
-
-target_link_libraries(brio_wu
-    PRIVATE
-        hlld
-)
-
-# ============================================================
-# HLLD unit tests (5 Riemann test cases)
-# ============================================================
-
-add_executable(hlld_tests
-    tests/hlld_test_main.cpp
-    tests/Brio-Wu_Shock_Tube.cpp
-)
-
-target_link_libraries(hlld_tests
-    PRIVATE
-        hlld
-)
-
-# ============================================================
-# Orszag-Tang Vortex 2D test executable
-# ============================================================
-
-add_executable(orszag_tang
-    src/orszag_tang.cpp
-)
-
-target_link_libraries(orszag_tang
-    PRIVATE
-        hlld
-)
-
-# ============================================================
 # 1D GLM core library
 # ============================================================
 

@@ -14,7 +14,7 @@ include_directories(include)
 # ============================================================
 
 add_library(hlld
-    src/hlld.cpp
+    src/hlld_solver.cpp
 )
 
 # ============================================================
@@ -121,4 +121,32 @@ add_executable(test_glm_2d
 target_link_libraries(test_glm_2d
     PRIVATE
         glm2d
+)
+
+# ============================================================
+# Integrated HLLD + GLM runner library
+# ============================================================
+
+add_library(mhd_runner
+    src/mhd_runner.cpp
+)
+
+target_link_libraries(mhd_runner
+    PUBLIC
+        hlld
+        glm2d
+)
+
+# ============================================================
+# Integrated HLLD + GLM runner test executable
+# (Orszag-Tang vortex and Brio-Wu shock tube with all cleaning methods)
+# ============================================================
+
+add_executable(test_mhd_runner
+    tests/test_mhd_runner.cpp
+)
+
+target_link_libraries(test_mhd_runner
+    PRIVATE
+        mhd_runner
 )

@@ -47,8 +47,8 @@ def to2d(df, col, N):
 
 
 def main():
-    figdir = Path("figures")
-    figdir.mkdir(exist_ok=True)
+    figdir = Path("figures/orszag_tang")
+    figdir.mkdir(parents=True, exist_ok=True)
 
     print("Loading CSV files...")
     df_no, N = load(CSV["noGLM"])

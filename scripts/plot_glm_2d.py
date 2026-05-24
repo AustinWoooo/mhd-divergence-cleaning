@@ -138,7 +138,7 @@ def main():
     if args.output is None:
         suffix = "norm" if args.normalized else "raw"
         args.output = (
-            f"figures/glm_2d_{args.metric}_{args.operator}_{suffix}_compare.png"
+            f"figures/glm_2d/glm_2d_{args.metric}_{args.operator}_{suffix}_compare.png"
         )
 
     plt.figure(figsize=(8, 5))
@@ -190,7 +190,7 @@ def main():
     plt.tight_layout()
 
     out = Path(args.output)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    out.parent.mkdir(parents=True, exist_ok=True)  # handles figures/glm_2d/ automatically
     plt.savefig(out, dpi=250)
 
     print(f"Saved {out}")

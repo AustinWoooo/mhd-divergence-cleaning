@@ -47,8 +47,8 @@ def load_all():
 
 
 def main():
-    figdir = Path("figures")
-    figdir.mkdir(exist_ok=True)
+    figdir = Path("figures/brio_wu")
+    figdir.mkdir(parents=True, exist_ok=True)
 
     print("Loading CSV files …")
     data = load_all()

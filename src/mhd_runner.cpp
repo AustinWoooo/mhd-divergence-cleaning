@@ -352,20 +352,20 @@ void run_mhd_2d_case(
     const std::string name   = cleaning_name(type);
     const std::string prefix = params.glm.out_prefix;
 
-    fs::create_directories("results/divergence");
-    fs::create_directories("results/snapshots");
+    fs::create_directories("results/mhd_runner/divergence");
+    fs::create_directories("results/mhd_runner/snapshots");
 
     // Initial snapshot (optional).
     if (params.glm.write_snapshot && params.glm.write_initial_snapshot) {
         const std::string snap =
-            "results/snapshots/" + prefix + "_" + name + "_initial.csv";
+            "results/mhd_runner/snapshots/" + prefix + "_" + name + "_initial.csv";
         write_mhd_2d_snapshot(U, params, snap);
         std::cout << "  Wrote " << snap << "\n";
     }
 
     // Diagnostics CSV.
     const std::string diag_name =
-        "results/divergence/" + prefix + "_" + name + ".csv";
+        "results/mhd_runner/divergence/" + prefix + "_" + name + ".csv";
     std::ofstream diag(diag_name);
     if (!diag) {
         throw std::runtime_error("Failed to open diagnostic file: " + diag_name);
@@ -414,7 +414,7 @@ void run_mhd_2d_case(
     // Final snapshot.
     if (params.glm.write_snapshot) {
         const std::string snap =
-            "results/snapshots/" + prefix + "_" + name + "_final.csv";
+            "results/mhd_runner/snapshots/" + prefix + "_" + name + "_final.csv";
         write_mhd_2d_snapshot(U, params, snap);
         std::cout << "  Wrote " << snap << "\n";
     }

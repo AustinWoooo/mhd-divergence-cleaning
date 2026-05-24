@@ -96,8 +96,8 @@ LINESTYLES = {
     "gi_mixed_eglm":       ":",
 }
 
-DIVERG_DIR   = Path("results/divergence")
-SNAPSHOT_DIR = Path("results/snapshots")
+DIVERG_DIR   = Path("results/mhd_runner/divergence")
+SNAPSHOT_DIR = Path("results/mhd_runner/snapshots")
 FIGURES_DIR  = Path("figures/mhd_runner")
 
 

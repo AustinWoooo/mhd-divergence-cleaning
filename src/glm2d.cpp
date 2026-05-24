@@ -361,12 +361,12 @@ void run_glm_2d_case(
 
     const std::string name = cleaning_name(type);
 
-    fs::create_directories("results/divergence");
-    fs::create_directories("results/snapshots");
+    fs::create_directories("results/glm_2d/divergence");
+    fs::create_directories("results/glm_2d/snapshots");
 
     if (params.write_snapshot && params.write_initial_snapshot) {
         const std::string initial_snap_name =
-            "results/snapshots/"
+            "results/glm_2d/snapshots/"
           + params.out_prefix
           + "_"
           + name
@@ -378,7 +378,7 @@ void run_glm_2d_case(
     }
 
     const std::string diag_name =
-        "results/divergence/"
+        "results/glm_2d/divergence/"
       + params.out_prefix
       + "_"
       + name
@@ -442,7 +442,7 @@ void run_glm_2d_case(
 
     if (params.write_snapshot) {
         const std::string final_snap_name =
-            "results/snapshots/"
+            "results/glm_2d/snapshots/"
           + params.out_prefix
           + "_"
           + name

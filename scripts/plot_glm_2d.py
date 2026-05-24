@@ -78,7 +78,7 @@ def main():
     parser.add_argument(
         "files",
         nargs="*",
-        help="diagnostic CSV files. If omitted, use results/divergence/glm_2d_*.csv",
+        help="diagnostic CSV files. If omitted, use results/glm_2d/divergence/glm_2d_*.csv",
     )
 
     parser.add_argument(
@@ -125,7 +125,7 @@ def main():
     files = args.files
 
     if len(files) == 0:
-        files = sorted(str(p) for p in Path("results/divergence").glob("glm_2d_*.csv"))
+        files = sorted(str(p) for p in Path("results/glm_2d/divergence").glob("glm_2d_*.csv"))
 
     if len(files) == 0:
         raise FileNotFoundError("No input files found.")

@@ -61,6 +61,92 @@ BW_PREFIX = "mhd_bw"
 FL_PREFIX = "mhd_fl"
 DA_PREFIX = "mhd_da"
 
+PROBLEMS = {
+    "brio_wu": {
+        "prefix": BW_PREFIX,
+        "kind": "profile",
+        "title": "Brio-Wu Shock Tube",
+        "t_end": 0.2,
+        "gamma": "2",
+    },
+    "orszag_tang": {
+        "prefix": OT_PREFIX,
+        "kind": "map",
+        "title": "Orszag-Tang Vortex",
+        "t_end": 0.5,
+        "gamma": "5/3",
+    },
+    "field_loop": {
+        "prefix": FL_PREFIX,
+        "kind": "map",
+        "title": "Field-Loop Advection",
+        "t_end": 0.5,
+        "gamma": "5/3",
+    },
+    "divergence_advection": {
+        "prefix": DA_PREFIX,
+        "kind": "map",
+        "title": "Divergence Advection",
+        "t_end": 0.5,
+        "gamma": "5/3",
+    },
+}
+
+METHODS = {
+    "none": {
+        "label": "None (HLLD only)",
+        "color": "#1f77b4",
+        "ls": "-",
+        "primary": True,
+    },
+    "hyperbolic_glm": {
+        "label": "Hyperbolic GLM",
+        "color": "#ff7f0e",
+        "ls": "--",
+        "primary": True,
+    },
+    "mixed_glm": {
+        "label": "Mixed GLM",
+        "color": "#2ca02c",
+        "ls": "-.",
+        "primary": True,
+    },
+    "mixed_eglm": {
+        "label": "Mixed EGLM",
+        "color": "#e377c2",
+        "ls": "-.",
+        "primary": True,
+    },
+    "gi_mixed_eglm": {
+        "label": "GI Mixed EGLM",
+        "color": "#bcbd22",
+        "ls": ":",
+        "primary": True,
+    },
+    "parabolic": {
+        "label": "Parabolic",
+        "color": "#d62728",
+        "ls": ":",
+        "primary": False,
+    },
+    "elliptic_projection": {
+        "label": "Projection",
+        "color": "#9467bd",
+        "ls": "-",
+        "primary": False,
+    },
+    "powell_source": {
+        "label": "Powell",
+        "color": "#8c564b",
+        "ls": "--",
+        "primary": False,
+    },
+}
+
+# Set to True if you want parabolic/projection/Powell included in the new
+# report figures. The summary CSV always includes every method below.
+INCLUDE_CAUTIONARY_METHODS = False
+
 CLEANING_TYPES = [
     "none",
     "hyperbolic_glm",
@@ -72,39 +158,12 @@ CLEANING_TYPES = [
     "gi_mixed_eglm",
 ]
 
-LABELS = {
-    "none":                "None (HLLD only)",
-    "hyperbolic_glm":      "Hyperbolic GLM",
-    "mixed_glm":           "Mixed GLM",
-    "parabolic":           "Parabolic",
-    "elliptic_projection": "Elliptic Projection",
-    "powell_source":       "Powell Source",
-    "mixed_eglm":          "Mixed EGLM",
-    "gi_mixed_eglm":       "GI Mixed EGLM",
-}
+LABELS = {name: spec["label"] for name, spec in METHODS.items()}
 
 # 8-colour palette drawn from tab10 (colourblind-friendly order).
-COLORS = {
-    "none":                "#1f77b4",
-    "hyperbolic_glm":      "#ff7f0e",
-    "mixed_glm":           "#2ca02c",
-    "parabolic":           "#d62728",
-    "elliptic_projection": "#9467bd",
-    "powell_source":       "#8c564b",
-    "mixed_eglm":          "#e377c2",
-    "gi_mixed_eglm":       "#bcbd22",
-}
+COLORS = {name: spec["color"] for name, spec in METHODS.items()}
 
-LINESTYLES = {
-    "none":                "-",
-    "hyperbolic_glm":      "--",
-    "mixed_glm":           "-.",
-    "parabolic":           ":",
-    "elliptic_projection": "-",
-    "powell_source":       "--",
-    "mixed_eglm":          "-.",
-    "gi_mixed_eglm":       ":",
-}
+LINESTYLES = {name: spec["ls"] for name, spec in METHODS.items()}
 
 DIVERG_DIR   = Path("results/mhd_runner/divergence")
 SNAPSHOT_DIR = Path("results/mhd_runner/snapshots")
@@ -115,18 +174,92 @@ FIGURES_DIR  = Path("figures/mhd_runner")
 #  Helpers
 # ---------------------------------------------------------------------------
 
-def load_diag(prefix: str, cleaning: str) -> pd.DataFrame | None:
+def selected_methods(include_cautionary: bool = INCLUDE_CAUTIONARY_METHODS) -> list[str]:
+    if include_cautionary:
+        return list(METHODS.keys())
+    return [name for name, spec in METHODS.items() if spec["primary"]]
+
+
+def warn_missing(path: Path):
+    print(f"  warning: missing {path}")
+
+
+def load_diag(prefix: str, cleaning: str, warn: bool = False) -> pd.DataFrame | None:
     path = DIVERG_DIR / f"{prefix}_{cleaning}.csv"
     if not path.exists():
+        if warn:
+            warn_missing(path)
         return None
     return pd.read_csv(path)
 
 
-def load_snapshot(prefix: str, cleaning: str) -> pd.DataFrame | None:
+def load_snapshot(prefix: str, cleaning: str, warn: bool = False) -> pd.DataFrame | None:
     path = SNAPSHOT_DIR / f"{prefix}_{cleaning}_final.csv"
     if not path.exists():
+        if warn:
+            warn_missing(path)
         return None
     return pd.read_csv(path)
+
+
+def first_existing_column(df: pd.DataFrame, names: list[str]) -> str | None:
+    for name in names:
+        if name in df.columns:
+            return name
+    return None
+
+
+def series_or_nan(df: pd.DataFrame, names: list[str]) -> pd.Series:
+    col = first_existing_column(df, names)
+    if col is None:
+        return pd.Series(np.nan, index=df.index)
+    return df[col]
+
+
+def final_scalar(df: pd.DataFrame, names: list[str]) -> float:
+    values = series_or_nan(df, names)
+    if len(values) == 0:
+        return float("nan")
+    return float(values.iloc[-1])
+
+
+def min_scalar(df: pd.DataFrame, names: list[str]) -> float:
+    values = series_or_nan(df, names)
+    finite = values[np.isfinite(values)]
+    if finite.empty:
+        return float("nan")
+    return float(finite.min())
+
+
+def max_flag(df: pd.DataFrame, names: list[str]) -> int:
+    values = series_or_nan(df, names)
+    finite = values[np.isfinite(values)]
+    if finite.empty:
+        return 0
+    return int(finite.max() > 0)
+
+
+def relative_drift(df: pd.DataFrame, names: list[str]) -> float:
+    values = series_or_nan(df, names)
+    finite = values[np.isfinite(values)]
+    if len(finite) < 2:
+        return float("nan")
+    initial = float(finite.iloc[0])
+    final = float(finite.iloc[-1])
+    denom = max(abs(initial), 1.0e-30)
+    return (final - initial) / denom
+
+
+def method_style(method: str) -> dict:
+    return METHODS[method]
+
+
+def problem_label(problem_key: str) -> str:
+    spec = PROBLEMS[problem_key]
+    return (
+        f"{spec['title']}  --  N=128x128, "
+        rf"$\gamma={spec['gamma']}$, $t_{{end}}={spec['t_end']}$"
+    )
 
 
 def to_2d(df: pd.DataFrame, col: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -252,6 +385,283 @@ def plot_problem_snapshot(prefix: str, title: str, output_name: str):
     plt.savefig(out, dpi=150, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
+
+
+def plot_divB_all_methods(problem_key: str, output_name: str):
+    spec = PROBLEMS[problem_key]
+    prefix = spec["prefix"]
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    plotted = 0
+    for method in selected_methods():
+        df = load_diag(prefix, method, warn=True)
+        if df is None:
+            continue
+        ycol = first_existing_column(df, ["L2_norm_fv", "L2_fv"])
+        if ycol is None:
+            print(f"  warning: {prefix}_{method}.csv has no divB L2 column")
+            continue
+        style = method_style(method)
+        ax.semilogy(
+            df["time"],
+            df[ycol],
+            color=style["color"],
+            ls=style["ls"],
+            lw=1.9,
+            label=style["label"],
+        )
+        plotted += 1
+
+    if plotted == 0:
+        print(f"  warning: no divB data found for {problem_key}")
+        plt.close()
+        return
+
+    ax.set_xlabel("time")
+    ax.set_ylabel(r"$L_2$ normalized FV $\nabla\!\cdot\!\mathbf{B}$")
+    ax.set_title(problem_label(problem_key))
+    ax.legend(fontsize=8.5, ncol=2)
+    ax.grid(True, which="both", alpha=0.3)
+    plt.tight_layout()
+
+    out = FIGURES_DIR / output_name
+    plt.savefig(out, dpi=220, bbox_inches="tight")
+    print(f"  Saved → {out}")
+    plt.close()
+
+
+def plot_history_all_map_problems(
+    quantity: str,
+    output_name: str,
+    ylabel: str,
+    use_semilogy: bool = False,
+):
+    map_problems = [k for k, v in PROBLEMS.items() if v["kind"] == "map"]
+    fig, axes = plt.subplots(
+        len(map_problems),
+        1,
+        figsize=(8.5, 3.1 * len(map_problems)),
+        sharex=False,
+    )
+    if len(map_problems) == 1:
+        axes = [axes]
+
+    plotted_any = False
+    for ax, problem_key in zip(axes, map_problems):
+        spec = PROBLEMS[problem_key]
+        prefix = spec["prefix"]
+        plotted = 0
+
+        for method in selected_methods():
+            df = load_diag(prefix, method, warn=True)
+            if df is None:
+                continue
+
+            if quantity == "min_pressure":
+                y = series_or_nan(df, ["min_pressure", "min_p"])
+            elif quantity == "energy_drift":
+                energy = series_or_nan(df, ["total_energy", "energy"])
+                finite = energy[np.isfinite(energy)]
+                if len(finite) == 0:
+                    y = pd.Series(np.nan, index=df.index)
+                else:
+                    e0 = float(finite.iloc[0])
+                    y = (energy - e0) / max(abs(e0), 1.0e-30)
+            else:
+                raise ValueError(f"unsupported history quantity: {quantity}")
+
+            style = method_style(method)
+            plot_fn = ax.semilogy if use_semilogy else ax.plot
+            plot_fn(
+                df["time"],
+                y,
+                color=style["color"],
+                ls=style["ls"],
+                lw=1.8,
+                label=style["label"],
+            )
+            plotted += 1
+            plotted_any = True
+
+        ax.set_title(spec["title"], fontsize=11)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.3)
+        if plotted:
+            ax.legend(fontsize=8, ncol=2)
+
+    if not plotted_any:
+        print(f"  warning: no data found for {output_name}")
+        plt.close()
+        return
+
+    axes[-1].set_xlabel("time")
+    plt.tight_layout()
+    out = FIGURES_DIR / output_name
+    plt.savefig(out, dpi=220, bbox_inches="tight")
+    print(f"  Saved → {out}")
+    plt.close()
+
+
+def plot_profile_all_methods(problem_key: str, output_name: str):
+    spec = PROBLEMS[problem_key]
+    prefix = spec["prefix"]
+    profile_vars = [
+        ("rho", r"Density $\rho$"),
+        ("p", r"Pressure $P$"),
+        ("u", r"Velocity $u_x$"),
+        ("By", r"Transverse field $B_y$"),
+    ]
+
+    rows = {}
+    for method in selected_methods():
+        df = load_snapshot(prefix, method, warn=True)
+        if df is None:
+            continue
+        ny = int(df["j"].max() + 1)
+        j_mid = ny // 2
+        rows[method] = df[df["j"] == j_mid].sort_values("i")
+
+    if not rows:
+        print(f"  warning: no profile snapshots found for {problem_key}")
+        return
+
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 7.2), sharex=True)
+    fig.suptitle(problem_label(problem_key), fontsize=12)
+    ax_flat = axes.ravel()
+
+    for ax, (col, ylabel) in zip(ax_flat, profile_vars):
+        for method, row in rows.items():
+            if col not in row.columns:
+                print(f"  warning: {prefix}_{method}_final.csv missing {col}")
+                continue
+            style = method_style(method)
+            ax.plot(
+                row["x"].values,
+                row[col].values,
+                color=style["color"],
+                ls=style["ls"],
+                lw=1.7,
+                label=style["label"],
+            )
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+
+    for ax in axes[1]:
+        ax.set_xlabel(r"$x$")
+
+    plt.tight_layout()
+    out = FIGURES_DIR / output_name
+    plt.savefig(out, dpi=220, bbox_inches="tight")
+    print(f"  Saved → {out}")
+    plt.close()
+
+
+def plot_single_method_snapshot(
+    problem_key: str,
+    method: str,
+    fields: list[tuple],
+    output_name: str,
+):
+    spec = PROBLEMS[problem_key]
+    prefix = spec["prefix"]
+    df = load_snapshot(prefix, method, warn=True)
+    if df is None:
+        print(f"  warning: skipping snapshot for {problem_key}/{method}")
+        return
+
+    fig, axes = plt.subplots(
+        1,
+        len(fields),
+        figsize=(5.1 * len(fields), 4.6),
+        squeeze=False,
+    )
+    axes = axes.ravel()
+    fig.suptitle(f"{spec['title']} -- {METHODS[method]['label']}", fontsize=12)
+
+    for ax, field in zip(axes, fields):
+        col, title, cmap, use_log = field[:4]
+        take_abs = bool(field[4]) if len(field) > 4 else (col == "divB_fv")
+
+        if col not in df.columns:
+            print(f"  warning: {prefix}_{method}_final.csv missing {col}")
+            ax.set_axis_off()
+            continue
+
+        x1d, y1d, Z = to_2d(df, col)
+        if take_abs:
+            Z = np.abs(Z)
+
+        finite_vals = Z[np.isfinite(Z)]
+        if finite_vals.size == 0:
+            finite_vals = np.array([0.0])
+
+        if use_log:
+            positive = finite_vals[finite_vals > 0]
+            eps = max(float(positive.min()) if positive.size else 1e-12, 1e-14)
+            norm = mcolors.LogNorm(vmin=eps, vmax=max(float(finite_vals.max()), eps * 10))
+        else:
+            norm = mcolors.Normalize(vmin=float(finite_vals.min()), vmax=float(finite_vals.max()))
+
+        im = ax.pcolormesh(x1d, y1d, Z, cmap=cmap, norm=norm, shading="auto")
+        ax.set_title(title)
+        ax.set_aspect("equal")
+        ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+        ax.set_xlabel(r"$x$")
+        ax.set_ylabel(r"$y$")
+        fig.colorbar(im, ax=ax, shrink=0.82, pad=0.02)
+
+    plt.tight_layout()
+    out = FIGURES_DIR / output_name
+    plt.savefig(out, dpi=220, bbox_inches="tight")
+    print(f"  Saved → {out}")
+    plt.close()
+
+
+def write_summary_csv(output_name: str = "mhd_runner_summary.csv"):
+    rows = []
+
+    for problem_key, spec in PROBLEMS.items():
+        prefix = spec["prefix"]
+        expected_t = float(spec["t_end"])
+
+        for method in METHODS:
+            df = load_diag(prefix, method, warn=False)
+            if df is None or len(df) == 0:
+                print(f"  warning: summary skipping missing {prefix}_{method}.csv")
+                continue
+
+            final_time = final_scalar(df, ["time", "t"])
+            has_nonfinite = max_flag(df, ["has_nonfinite"])
+            has_negative_density = max_flag(df, ["has_negative_density"])
+            has_negative_pressure = max_flag(df, ["has_negative_pressure"])
+            completed = (
+                np.isfinite(final_time)
+                and final_time >= expected_t - 1.0e-10
+                and not has_nonfinite
+                and not has_negative_density
+                and not has_negative_pressure
+            )
+
+            rows.append({
+                "problem": problem_key,
+                "method": method,
+                "completed": int(completed),
+                "final_time": final_time,
+                "final_L2_norm_fv": final_scalar(df, ["L2_norm_fv", "L2_fv"]),
+                "final_Linf_norm_fv": final_scalar(df, ["Linf_norm_fv", "Linf_fv"]),
+                "min_pressure": min_scalar(df, ["min_pressure", "min_p"]),
+                "mass_drift": relative_drift(df, ["total_mass", "mass"]),
+                "energy_drift": relative_drift(df, ["total_energy", "energy"]),
+                "has_nonfinite": has_nonfinite,
+                "has_negative_density": has_negative_density,
+                "has_negative_pressure": has_negative_pressure,
+            })
+
+    out = FIGURES_DIR / output_name
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(out, index=False)
+    print(f"  Wrote → {out}")
 
 
 # ---------------------------------------------------------------------------
@@ -502,10 +912,18 @@ def main():
     print("=== Orszag-Tang vortex ===")
     plot_ot_divB()
     plot_ot_snapshot()
+    plot_divB_all_methods(
+        "orszag_tang",
+        "mhd_runner_ot_divB_all_methods.png",
+    )
 
     print("\n=== Brio-Wu shock tube ===")
     plot_bw_divB()
     plot_bw_profiles()
+    plot_profile_all_methods(
+        "brio_wu",
+        "mhd_runner_bw_profiles_all_methods.png",
+    )
 
     print("\n=== Field-loop advection ===")
     plot_problem_divB(
@@ -519,6 +937,19 @@ def main():
         FL_PREFIX,
         r"Field-Loop Advection  —  final state at $t=0.5$",
         "mhd_runner_fl_snapshot.png",
+    )
+    plot_divB_all_methods(
+        "field_loop",
+        "mhd_runner_fl_divB_all_methods.png",
+    )
+    plot_single_method_snapshot(
+        "field_loop",
+        "mixed_glm",
+        [
+            ("Bmag", r"Final $|\mathbf{B}|$", "magma", False, False),
+            ("divB_fv", r"Final $|\nabla\!\cdot\!B|$ (FV)", "hot_r", True, True),
+        ],
+        "mhd_runner_fl_snapshot_mixed_glm.png",
     )
 
     print("\n=== Divergence advection ===")
@@ -534,6 +965,32 @@ def main():
         r"Divergence Advection  —  final state at $t=0.5$",
         "mhd_runner_da_snapshot.png",
     )
+    plot_divB_all_methods(
+        "divergence_advection",
+        "mhd_runner_da_divB_all_methods.png",
+    )
+    plot_single_method_snapshot(
+        "divergence_advection",
+        "mixed_glm",
+        [
+            ("divB_fv", r"Final $\nabla\!\cdot\!B$ (FV)", "coolwarm", False, False),
+            ("Bmag", r"Final $|\mathbf{B}|$", "magma", False, False),
+        ],
+        "mhd_runner_da_snapshot_mixed_glm.png",
+    )
+
+    print("\n=== Cross-problem diagnostics ===")
+    plot_history_all_map_problems(
+        "energy_drift",
+        "mhd_runner_energy_drift_all_methods.png",
+        r"Relative total-energy drift",
+    )
+    plot_history_all_map_problems(
+        "min_pressure",
+        "mhd_runner_min_pressure_all_methods.png",
+        r"Minimum pressure",
+    )
+    write_summary_csv()
 
     print("\nDone.")
 

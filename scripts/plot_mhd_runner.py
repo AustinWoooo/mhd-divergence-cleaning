@@ -23,6 +23,14 @@ Four figures are saved:
       Brio-Wu strip: 1D final-state profiles along the middle row
       (rho, p, u, By) for NONE vs MIXED_GLM.
 
+  figures/mhd_runner/mhd_runner_fl_divB.png
+  figures/mhd_runner/mhd_runner_fl_snapshot.png
+      Field-loop advection diagnostics and final maps.
+
+  figures/mhd_runner/mhd_runner_da_divB.png
+  figures/mhd_runner/mhd_runner_da_snapshot.png
+      Divergence-advection diagnostics and final maps.
+
 Usage
 -----
   # 1. Build and run the C++ runner first:
@@ -50,6 +58,8 @@ import matplotlib.colors as mcolors
 
 OT_PREFIX = "mhd_ot"
 BW_PREFIX = "mhd_bw"
+FL_PREFIX = "mhd_fl"
+DA_PREFIX = "mhd_da"
 
 CLEANING_TYPES = [
     "none",
@@ -138,6 +148,110 @@ def to_2d(df: pd.DataFrame, col: str) -> tuple[np.ndarray, np.ndarray, np.ndarra
     y1d = df[df["i"] == 0].sort_values("j")["y"].values      # (ny,)
     Z   = df.sort_values(["j", "i"])[col].values.reshape(ny, nx)
     return x1d, y1d, Z
+
+
+def plot_problem_divB(prefix: str, title: str, output_name: str):
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    plotted = 0
+    for ct in CLEANING_TYPES:
+        df = load_diag(prefix, ct)
+        if df is None:
+            continue
+        ycol = "L2_norm_fv" if "L2_norm_fv" in df.columns else "L2_fv"
+        ax.semilogy(
+            df["time"],
+            df[ycol],
+            color=COLORS[ct],
+            ls=LINESTYLES[ct],
+            lw=1.8,
+            label=LABELS[ct],
+        )
+        plotted += 1
+
+    if plotted == 0:
+        print(f"  [{prefix}_divB] no data found — run test_mhd_runner first.")
+        plt.close()
+        return
+
+    ax.set_xlabel("time", fontsize=12)
+    ax.set_ylabel(r"$L_2$ normalized FV $\nabla\!\cdot\!\mathbf{B}$", fontsize=12)
+    ax.set_title(title, fontsize=11)
+    ax.legend(fontsize=8.5, ncol=2)
+    ax.grid(True, which="both", alpha=0.3)
+    plt.tight_layout()
+
+    out = FIGURES_DIR / output_name
+    plt.savefig(out, dpi=200, bbox_inches="tight")
+    print(f"  Saved → {out}")
+    plt.close()
+
+
+def plot_problem_snapshot(prefix: str, title: str, output_name: str):
+    pairs = [("none", "None"), ("mixed_glm", "Mixed GLM")]
+
+    dfs = {}
+    for ct, _ in pairs:
+        df = load_snapshot(prefix, ct)
+        if df is None:
+            print(f"  [{prefix}_snapshot] missing {prefix}_{ct}_final.csv — skipping.")
+            return
+        dfs[ct] = df
+
+    plot_rows = [
+        ("rho",     r"Density $\rho$",        "viridis", False),
+        ("p",       r"Pressure $P$",          "plasma",  False),
+        ("Bmag",    r"$|\mathbf{B}|$",        "magma",   False),
+        ("divB_fv", r"$|\nabla\!\cdot\!B|$",  "hot_r",   True),
+    ]
+
+    fig, axes = plt.subplots(len(plot_rows), 2, figsize=(10, 13))
+    fig.suptitle(title, fontsize=12, y=0.998)
+
+    for row, (col, ylabel, cmap, use_log) in enumerate(plot_rows):
+        Zs = {}
+        for ct, _ in pairs:
+            x1d, y1d, Z = to_2d(dfs[ct], col)
+            if col == "divB_fv":
+                Z = np.abs(Z)
+            Zs[ct] = Z
+
+        all_vals = np.concatenate([Z.ravel() for Z in Zs.values()])
+        finite_vals = all_vals[np.isfinite(all_vals)]
+        if finite_vals.size == 0:
+            finite_vals = np.array([0.0])
+        vmin = finite_vals.min()
+        vmax = finite_vals.max()
+
+        if use_log:
+            positive = finite_vals[finite_vals > 0]
+            eps = max(float(positive.min()) if positive.size else 1e-12, 1e-14)
+            norm = mcolors.LogNorm(vmin=eps, vmax=max(vmax, eps * 10))
+        else:
+            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+
+        ims = []
+        for col_idx, (ct, ctlabel) in enumerate(pairs):
+            ax = axes[row, col_idx]
+            im = ax.pcolormesh(x1d, y1d, Zs[ct], cmap=cmap, norm=norm, shading="auto")
+            ax.set_aspect("equal")
+            ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+            ims.append(im)
+
+            if col_idx == 0:
+                ax.set_ylabel(ylabel + r" / $y$", fontsize=10)
+            if row == len(plot_rows) - 1:
+                ax.set_xlabel(r"$x$", fontsize=10)
+            if row == 0:
+                ax.set_title(ctlabel, fontsize=12, fontweight="bold")
+
+        fig.colorbar(ims[-1], ax=axes[row, :], shrink=0.72, pad=0.02, aspect=28)
+
+    plt.tight_layout()
+    out = FIGURES_DIR / output_name
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"  Saved → {out}")
+    plt.close()
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +506,34 @@ def main():
     print("\n=== Brio-Wu shock tube ===")
     plot_bw_divB()
     plot_bw_profiles()
+
+    print("\n=== Field-loop advection ===")
+    plot_problem_divB(
+        FL_PREFIX,
+        r"Field-Loop Advection  —  HLLD + cleaning comparison"
+        "\n"
+        r"$N=128\times128$,  $\gamma=5/3$,  $t_{\rm end}=0.5$",
+        "mhd_runner_fl_divB.png",
+    )
+    plot_problem_snapshot(
+        FL_PREFIX,
+        r"Field-Loop Advection  —  final state at $t=0.5$",
+        "mhd_runner_fl_snapshot.png",
+    )
+
+    print("\n=== Divergence advection ===")
+    plot_problem_divB(
+        DA_PREFIX,
+        r"Divergence Advection  —  HLLD + cleaning comparison"
+        "\n"
+        r"$N=128\times128$,  $\gamma=5/3$,  $t_{\rm end}=0.5$",
+        "mhd_runner_da_divB.png",
+    )
+    plot_problem_snapshot(
+        DA_PREFIX,
+        r"Divergence Advection  —  final state at $t=0.5$",
+        "mhd_runner_da_snapshot.png",
+    )
 
     print("\nDone.")
 

@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -55,6 +56,91 @@ inline State vec_to_state(const std::vector<double>& v) {
     State s;
     for (int k = 0; k < NVAR; ++k) s[k] = v[k];
     return s;
+}
+
+struct MHDRunDiagnostics {
+    double total_mass = 0.0;
+    double total_momentum_x = 0.0;
+    double total_momentum_y = 0.0;
+    double total_momentum_z = 0.0;
+    double total_energy = 0.0;
+    double min_density = std::numeric_limits<double>::infinity();
+    double min_pressure = std::numeric_limits<double>::infinity();
+    bool has_nonfinite = false;
+    bool has_negative_density = false;
+    bool has_negative_pressure = false;
+};
+
+MHDRunDiagnostics compute_mhd_run_diagnostics(
+    const std::vector<State>& U,
+    double gamma,
+    double cell_area
+) {
+    MHDRunDiagnostics out;
+
+    for (const State& cell : U) {
+        for (double value : cell) {
+            if (!std::isfinite(value)) {
+                out.has_nonfinite = true;
+            }
+        }
+
+        const double rho = cell[RHO];
+        const double energy = cell[E];
+
+        out.total_mass += rho * cell_area;
+        out.total_momentum_x += cell[MX] * cell_area;
+        out.total_momentum_y += cell[MY] * cell_area;
+        out.total_momentum_z += cell[MZ] * cell_area;
+        out.total_energy += energy * cell_area;
+
+        if (std::isfinite(rho)) {
+            out.min_density = std::min(out.min_density, rho);
+            if (rho < 0.0) {
+                out.has_negative_density = true;
+            }
+        }
+
+        const PrimState W = state_to_prim(cell, gamma);
+        if (!std::isfinite(W.p)) {
+            out.has_nonfinite = true;
+        } else {
+            out.min_pressure = std::min(out.min_pressure, W.p);
+            if (W.p < 0.0) {
+                out.has_negative_pressure = true;
+            }
+        }
+    }
+
+    return out;
+}
+
+bool has_mhd_run_failure(const MHDRunDiagnostics& diag) {
+    return diag.has_nonfinite
+        || diag.has_negative_density
+        || diag.has_negative_pressure;
+}
+
+void print_mhd_run_failure_warning(
+    const MHDRunParams& params,
+    const std::string& cleaning,
+    int step,
+    double time,
+    double dt,
+    const MHDRunDiagnostics& diag
+) {
+    std::cerr << "WARNING: stopping MHD run after invalid state detected"
+              << "  problem=" << params.problem
+              << "  cleaning=" << cleaning
+              << "  step=" << step
+              << "  time=" << time
+              << "  dt=" << dt
+              << "  has_nonfinite=" << (diag.has_nonfinite ? 1 : 0)
+              << "  has_negative_density="
+              << (diag.has_negative_density ? 1 : 0)
+              << "  has_negative_pressure="
+              << (diag.has_negative_pressure ? 1 : 0)
+              << "\n";
 }
 
 // -----------------------------------------------------------------------------
@@ -372,19 +458,49 @@ void run_mhd_2d_case(
     }
     diag << "step,time,dt,"
          << "L1_fv,L2_fv,Linf_fv,"
-         << "L1_norm_fv,L2_norm_fv,Linf_norm_fv\n";
+         << "L1_norm_fv,L2_norm_fv,Linf_norm_fv,"
+         << "total_mass,total_momentum_x,total_momentum_y,total_momentum_z,"
+         << "total_energy,min_density,min_pressure,"
+         << "has_nonfinite,has_negative_density,has_negative_pressure\n";
 
     double t    = 0.0;
     int    step = 0;
+    bool stopped_for_failure = false;
 
     while (true) {
         const LocalDivBNorms norms =
             compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
+        const MHDRunDiagnostics run_diag =
+            compute_mhd_run_diagnostics(U, gamma, dx * dy);
 
         diag << step << "," << t << "," << params.glm.dt << ","
              << norms.L1 << "," << norms.L2 << "," << norms.Linf << ","
              << norms.L1_norm << "," << norms.L2_norm << "," << norms.Linf_norm
+             << ","
+             << run_diag.total_mass << ","
+             << run_diag.total_momentum_x << ","
+             << run_diag.total_momentum_y << ","
+             << run_diag.total_momentum_z << ","
+             << run_diag.total_energy << ","
+             << run_diag.min_density << ","
+             << run_diag.min_pressure << ","
+             << (run_diag.has_nonfinite ? 1 : 0) << ","
+             << (run_diag.has_negative_density ? 1 : 0) << ","
+             << (run_diag.has_negative_pressure ? 1 : 0)
              << "\n";
+
+        if (has_mhd_run_failure(run_diag)) {
+            stopped_for_failure = true;
+            print_mhd_run_failure_warning(
+                params,
+                name,
+                step,
+                t,
+                params.glm.dt,
+                run_diag
+            );
+            break;
+        }
 
         if (t >= t_end - 1e-12) break;
 
@@ -408,8 +524,13 @@ void run_mhd_2d_case(
         }
     }
 
-    std::cout << "  [" << name << "] finished: " << step
-              << " steps, t=" << t << "\n";
+    if (stopped_for_failure) {
+        std::cout << "  [" << name << "] stopped after failure: " << step
+                  << " steps, t=" << t << "\n";
+    } else {
+        std::cout << "  [" << name << "] finished: " << step
+                  << " steps, t=" << t << "\n";
+    }
 
     // Final snapshot.
     if (params.glm.write_snapshot) {

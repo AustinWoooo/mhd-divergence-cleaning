@@ -14,47 +14,7 @@ include_directories(include)
 # ============================================================
 
 add_library(hlld
-    src/hlld.cpp
-)
-
-# ============================================================
-# Brio-Wu Shock Tube test executable
-# ============================================================
-
-add_executable(brio_wu
-    src/main.cpp
-)
-
-target_link_libraries(brio_wu
-    PRIVATE
-        hlld
-)
-
-# ============================================================
-# HLLD unit tests (5 Riemann test cases)
-# ============================================================
-
-add_executable(hlld_tests
-    tests/hlld_test_main.cpp
-    tests/Brio-Wu_Shock_Tube.cpp
-)
-
-target_link_libraries(hlld_tests
-    PRIVATE
-        hlld
-)
-
-# ============================================================
-# Orszag-Tang Vortex 2D test executable
-# ============================================================
-
-add_executable(orszag_tang
-    src/orszag_tang.cpp
-)
-
-target_link_libraries(orszag_tang
-    PRIVATE
-        hlld
+    src/hlld_solver.cpp
 )
 
 # ============================================================
@@ -121,4 +81,32 @@ add_executable(test_glm_2d
 target_link_libraries(test_glm_2d
     PRIVATE
         glm2d
+)
+
+# ============================================================
+# Integrated HLLD + GLM runner library
+# ============================================================
+
+add_library(mhd_runner
+    src/mhd_runner.cpp
+)
+
+target_link_libraries(mhd_runner
+    PUBLIC
+        hlld
+        glm2d
+)
+
+# ============================================================
+# Integrated HLLD + GLM runner test executable
+# (Orszag-Tang vortex and Brio-Wu shock tube with all cleaning methods)
+# ============================================================
+
+add_executable(test_mhd_runner
+    tests/test_mhd_runner.cpp
+)
+
+target_link_libraries(test_mhd_runner
+    PRIVATE
+        mhd_runner
 )

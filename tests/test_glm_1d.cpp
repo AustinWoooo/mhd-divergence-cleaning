@@ -57,7 +57,7 @@ void run_case(CleaningType type) {
     initialize(U, dx);
 
     const std::string name = cleaning_name(type);
-    const std::string outname = "results/divergence/glm_1d_" + name + ".csv";
+    const std::string outname = "results/glm_1d/glm_1d_" + name + ".csv";
 
     std::ofstream fout(outname);
     fout << "step,time,L1,L2,Linf\n";

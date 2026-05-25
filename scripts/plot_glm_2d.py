@@ -78,7 +78,7 @@ def main():
     parser.add_argument(
         "files",
         nargs="*",
-        help="diagnostic CSV files. If omitted, use results/divergence/glm_2d_*.csv",
+        help="diagnostic CSV files. If omitted, use results/glm_2d/divergence/glm_2d_*.csv",
     )
 
     parser.add_argument(
@@ -125,7 +125,7 @@ def main():
     files = args.files
 
     if len(files) == 0:
-        files = sorted(str(p) for p in Path("results/divergence").glob("glm_2d_*.csv"))
+        files = sorted(str(p) for p in Path("results/glm_2d/divergence").glob("glm_2d_*.csv"))
 
     if len(files) == 0:
         raise FileNotFoundError("No input files found.")
@@ -138,7 +138,7 @@ def main():
     if args.output is None:
         suffix = "norm" if args.normalized else "raw"
         args.output = (
-            f"figures/glm_2d_{args.metric}_{args.operator}_{suffix}_compare.png"
+            f"figures/glm_2d/glm_2d_{args.metric}_{args.operator}_{suffix}_compare.png"
         )
 
     plt.figure(figsize=(8, 5))
@@ -190,7 +190,7 @@ def main():
     plt.tight_layout()
 
     out = Path(args.output)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    out.parent.mkdir(parents=True, exist_ok=True)  # handles figures/glm_2d/ automatically
     plt.savefig(out, dpi=250)
 
     print(f"Saved {out}")

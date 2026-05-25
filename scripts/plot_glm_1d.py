@@ -2,9 +2,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-base = Path("results/divergence")
-figdir = Path("figures")
-figdir.mkdir(exist_ok=True)
+base = Path("results/glm_1d")
+figdir = Path("figures/glm_1d")
+figdir.mkdir(parents=True, exist_ok=True)
 
 cases = [
     "none",

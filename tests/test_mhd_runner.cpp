@@ -1,9 +1,11 @@
 // =============================================================================
 //  tests/test_mhd_runner.cpp
 //
-//  Drives the integrated HLLD + GLM runner on two MHD problems:
+//  Drives the integrated HLLD + GLM runner on several MHD problems:
 //    1. Orszag-Tang vortex   (smooth, periodic, full 2D)
 //    2. Brio-Wu shock tube   (1D-in-y replicated 2D strip)
+//    3. Field-loop advection (weak localized magnetic loop)
+//    4. Divergence advection (controlled non-solenoidal perturbation)
 //
 //  Each problem is run with several cleaning methods so divB behaviour can be
 //  compared in results/divergence/*.csv and results/snapshots/*_final.csv.
@@ -11,7 +13,7 @@
 //  Usage:
 //    ./test_mhd_runner                              # all problems, all cleanings
 //    ./test_mhd_runner orszag_tang                  # one problem, all cleanings
-//    ./test_mhd_runner brio_wu mixed_glm            # one problem, one cleaning
+//    ./test_mhd_runner field_loop mixed_glm         # one problem, one cleaning
 //    ./test_mhd_runner orszag_tang none mixed_glm   # one problem, multiple cleanings
 //
 //  Cleaning type names (lowercase):
@@ -46,7 +48,8 @@ void print_usage(const char* prog) {
     std::cerr
         << "Usage: " << prog << " [problem] [cleaning...]\n"
         << "\n"
-        << "  problem   : orszag_tang | brio_wu  (default: both)\n"
+        << "  problem   : orszag_tang | brio_wu | field_loop\n"
+        << "              divergence_advection  (default: orszag_tang + brio_wu)\n"
         << "  cleaning  : none | parabolic | hyperbolic_glm | mixed_glm\n"
         << "              elliptic_projection | powell_source\n"
         << "              mixed_eglm | gi_mixed_eglm  (default: all)\n"
@@ -60,6 +63,12 @@ void print_usage(const char* prog) {
         << "\n"
         << "  " << prog << " brio_wu mixed_glm\n"
         << "      Run Brio-Wu shock tube with mixed GLM only.\n"
+        << "\n"
+        << "  " << prog << " field_loop mixed_glm\n"
+        << "      Run field-loop advection with mixed GLM only.\n"
+        << "\n"
+        << "  " << prog << " divergence_advection none hyperbolic_glm mixed_glm\n"
+        << "      Run divergence advection with three selected cleaning methods.\n"
         << "\n"
         << "  " << prog << " orszag_tang none mixed_glm hyperbolic_glm\n"
         << "      Run Orszag-Tang with three selected cleaning methods.\n";
@@ -127,6 +136,10 @@ int main(int argc, char* argv[]) {
             problems = {{"orszag_tang", "mhd_ot"}};
         } else if (p == "brio_wu") {
             problems = {{"brio_wu", "mhd_bw"}};
+        } else if (p == "field_loop") {
+            problems = {{"field_loop", "mhd_fl"}};
+        } else if (p == "divergence_advection") {
+            problems = {{"divergence_advection", "mhd_da"}};
         } else {
             std::cerr << "Unknown problem: \"" << p << "\"\n\n";
             print_usage(argv[0]);
@@ -163,10 +176,20 @@ int main(int argc, char* argv[]) {
             std::cout << "\n#### Orszag-Tang vortex ####\n";
             gamma = 5.0 / 3.0;
             t_end = 0.5;
-        } else {
+        } else if (problem == "brio_wu") {
             std::cout << "\n#### Brio-Wu shock tube (2D strip) ####\n";
             gamma = 2.0;
             t_end = 0.2;
+        } else if (problem == "field_loop") {
+            std::cout << "\n#### Field-loop advection ####\n";
+            gamma = 5.0 / 3.0;
+            t_end = 0.5;
+        } else if (problem == "divergence_advection") {
+            std::cout << "\n#### Divergence advection ####\n";
+            gamma = 5.0 / 3.0;
+            t_end = 0.5;
+        } else {
+            throw std::runtime_error("Unhandled problem configuration: " + problem);
         }
         run_problem(problem, prefix, gamma, t_end, 128, cases);
     }

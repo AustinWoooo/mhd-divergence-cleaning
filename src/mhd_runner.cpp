@@ -393,6 +393,103 @@ void initialize_brio_wu_strip_2d(
     }
 }
 
+void initialize_field_loop_2d(
+    std::vector<State>& U,
+    const MHDRunParams& params
+) {
+    const int nx = params.glm.nx;
+    const int ny = params.glm.ny;
+    const double dx = params.glm.dx;
+    const double dy = params.glm.dy;
+    const double gamma = params.gamma;
+
+    if (static_cast<int>(U.size()) != nx * ny) {
+        throw std::runtime_error("initialize_field_loop_2d: U size mismatch.");
+    }
+
+    const double xc = 0.5;
+    const double yc = 0.5;
+    const double radius = 0.15;
+    const double A0 = 1.0e-3;
+
+    for (int j = 0; j < ny; ++j) {
+        const double y = (j + 0.5) * dy;
+        for (int i = 0; i < nx; ++i) {
+            const double x = (i + 0.5) * dx;
+            const double rx = x - xc;
+            const double ry = y - yc;
+            const double r = std::sqrt(rx * rx + ry * ry);
+
+            double Bx = 0.0;
+            double By = 0.0;
+            if (r > 0.0 && r < radius) {
+                Bx = -A0 * ry / r;
+                By =  A0 * rx / r;
+            }
+
+            const PrimState W(
+                1.0,
+                1.0,
+                1.0,
+                0.0,
+                1.0,
+                Bx,
+                By,
+                0.0,
+                0.0
+            );
+
+            U[idx2d(i, j, nx)] = prim_to_state(W, gamma);
+        }
+    }
+}
+
+void initialize_divergence_advection_2d(
+    std::vector<State>& U,
+    const MHDRunParams& params
+) {
+    const int nx = params.glm.nx;
+    const int ny = params.glm.ny;
+    const double dx = params.glm.dx;
+    const double dy = params.glm.dy;
+    const double gamma = params.gamma;
+
+    if (static_cast<int>(U.size()) != nx * ny) {
+        throw std::runtime_error(
+            "initialize_divergence_advection_2d: U size mismatch."
+        );
+    }
+
+    const double xc = 0.35;
+    const double yc = 0.5;
+    const double alpha = 100.0;
+
+    for (int j = 0; j < ny; ++j) {
+        const double y = (j + 0.5) * dy;
+        for (int i = 0; i < nx; ++i) {
+            const double x = (i + 0.5) * dx;
+            const double rx = x - xc;
+            const double ry = y - yc;
+            const double r2 = rx * rx + ry * ry;
+            const double g = std::exp(-alpha * r2);
+
+            const PrimState W(
+                1.0,
+                1.0,
+                0.5,
+                0.0,
+                1.0,
+                1.0 + 0.05 * g,
+                0.025 * g,
+                0.0,
+                0.0
+            );
+
+            U[idx2d(i, j, nx)] = prim_to_state(W, gamma);
+        }
+    }
+}
+
 // =============================================================================
 //  Main runner: RK2(HLLD) + GLM cleaning, with divB diagnostics.
 // =============================================================================
@@ -419,6 +516,10 @@ void run_mhd_2d_case(
         initialize_orszag_tang_2d(U, params);
     } else if (params.problem == "brio_wu") {
         initialize_brio_wu_strip_2d(U, params);
+    } else if (params.problem == "field_loop") {
+        initialize_field_loop_2d(U, params);
+    } else if (params.problem == "divergence_advection") {
+        initialize_divergence_advection_2d(U, params);
     } else {
         throw std::invalid_argument(
             "run_mhd_2d_case: unknown problem '" + params.problem + "'"

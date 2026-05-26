@@ -24,7 +24,12 @@ void subtract_mean(std::vector<double>& a) {
     }
 }
 
-std::vector<double> solve_periodic_poisson_sor_5pt(
+struct PoissonSolveResult {
+    std::vector<double> phi;
+    ProjectionResult info;
+};
+
+PoissonSolveResult solve_periodic_poisson_sor_5pt(
     const std::vector<double>& rhs_input,
     const GLM2DParams& params
 ) {
@@ -45,6 +50,9 @@ std::vector<double> solve_periodic_poisson_sor_5pt(
     subtract_mean(rhs);
 
     double max_update = std::numeric_limits<double>::infinity();
+
+    ProjectionResult info{};
+    info.converged = false;
 
     for (int iter = 0; iter < params.poisson_max_iter; ++iter) {
         max_update = 0.0;
@@ -86,19 +94,29 @@ std::vector<double> solve_periodic_poisson_sor_5pt(
             subtract_mean(phi);
         }
 
+        info.iterations = iter + 1;
+        info.final_residual = max_update;
+
         if (max_update < params.poisson_tol) {
+            info.converged = true;
             break;
         }
     }
 
     subtract_mean(phi);
 
-    return phi;
+    if (params.poisson_max_iter == 0) {
+        info.iterations = 0;
+        info.final_residual = max_update;
+        info.converged = false;
+    }
+
+    return {phi, info};
 }
 
 } // namespace
 
-void apply_elliptic_projection_2d(
+ProjectionResult apply_elliptic_projection_2d(
     std::vector<State>& U,
     const GLM2DParams& params
 ) {
@@ -117,8 +135,9 @@ void apply_elliptic_projection_2d(
     // Periodic Poisson equation is solvable only for zero-mean RHS.
     subtract_mean(rhs);
 
-    const std::vector<double> phi =
+    const PoissonSolveResult solve =
         solve_periodic_poisson_sor_5pt(rhs, params);
+    const std::vector<double>& phi = solve.phi;
 
     const std::vector<State> Uold = U;
 
@@ -153,4 +172,6 @@ void apply_elliptic_projection_2d(
             U[id] = cell;
         }
     }
+
+    return solve.info;
 }

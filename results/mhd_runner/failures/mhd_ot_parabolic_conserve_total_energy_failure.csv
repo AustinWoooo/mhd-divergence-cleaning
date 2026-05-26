@@ -1,0 +1,2 @@
+problem,method,stage,step,time,reason,i,j,rho,pressure,total_energy,kinetic_energy,magnetic_energy,internal_energy,Bx,By,Bz,psi,divB,energy_policy
+orszag_tang,parabolic,after_hydro,241,0.302141,non_positive_pressure,117,52,0.193636,-0.00318859,0.772365,0.420061,0.357087,-0.00478288,-0.434003,-0.725131,0,0,-2.30435,conserve_total_energy

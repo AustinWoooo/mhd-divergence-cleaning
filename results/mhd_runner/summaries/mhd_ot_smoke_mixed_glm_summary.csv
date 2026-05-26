@@ -1,0 +1,2 @@
+problem,method,final_time_reached,failure_time,failure_reason,final_L1_fv,final_L2_fv,final_Linf_fv,energy_initial,energy_final,energy_drift,min_pressure,min_density,cleaning_subcycles_total,projection_iterations_total
+orszag_tang,mixed_glm,1,nan,,0.0449199,0.0593198,0.169032,0.349257,0.349257,1.43047e-15,0.128123,0.215067,8,0

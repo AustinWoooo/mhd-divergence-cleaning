@@ -1,0 +1,6 @@
+problem,method,energy_policy,failure_stage,failure_time,i,j,pressure,rho,internal_energy,magnetic_energy,kinetic_energy,divB
+orszag_tang,elliptic_projection,conserve_total_energy,after_hydro,0.286554,117,52,-0.00290075,0.203984,-0.00435113,0.374339,0.439853,-1.55676
+orszag_tang,elliptic_projection,preserve_thermal_pressure,after_hydro,0.279256,117,52,-0.00417827,0.223179,-0.0062674,0.382214,0.452444,-2.18069
+orszag_tang,parabolic,conserve_total_energy,after_hydro,0.302141,117,52,-0.00318859,0.193636,-0.00478288,0.357087,0.420061,-2.30435
+orszag_tang,parabolic,preserve_thermal_pressure,after_hydro,0.293959,117,52,-0.00207316,0.215726,-0.00310974,0.357797,0.431337,-2.86117
+orszag_tang,powell_source,conserve_total_energy,after_cleaning,0.0543921,100,69,-0.0767052,0.236449,-0.115058,0.366113,0.520424,-166.957

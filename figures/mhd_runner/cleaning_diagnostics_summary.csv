@@ -1,0 +1,9 @@
+problem,method,divergence_file,divergence_rows,final_time,final_time_reached,final_L1_fv,final_L2_fv,final_Linf_fv,final_L2_norm_fv,energy_initial,energy_final,energy_drift_reported,energy_drift_absolute,min_pressure,min_density,failure_time,failure_reason,cleaning_subcycles_total,projection_iterations_total
+orszag_tang,none,results/mhd_runner/divergence/mhd_ot_none.csv,394,0.5,1,0.561787,1.37052,49.3768,0.106175,0.349257,0.349257,-9.21857e-15,0.0,0.0458955,0.113642,,,0,0
+orszag_tang,hyperbolic_glm,results/mhd_runner/divergence/mhd_ot_hyperbolic_glm.csv,385,0.5,1,0.0910082,0.1752,2.82511,0.0118678,0.349257,0.349257,-3.4967e-15,0.0,0.0605971,0.124037,,,767,0
+orszag_tang,mixed_glm,results/mhd_runner/divergence/mhd_ot_mixed_glm.csv,384,0.5,1,0.13078,0.209552,3.15897,0.0150716,0.349257,0.349257,-8.42386e-15,0.0,0.0568176,0.123103,,,766,0
+orszag_tang,parabolic,results/mhd_runner/divergence/mhd_ot_parabolic.csv,48,0.5,0,0.0663037,0.155394,3.29353,,0.349257,0.349257,-6.51657e-15,0.0,-0.00322016,0.0667403,0.301419,non_positive_pressure,2121,0
+orszag_tang,elliptic_projection,results/mhd_runner/divergence/mhd_ot_elliptic_projection.csv,306,0.5,0,2.73933e-09,3.44932e-09,2.09428e-08,,0.349257,0.349257,-9.05963e-15,0.0,-0.0012849,0.0626903,0.286554,non_positive_pressure,230,189583
+orszag_tang,powell_source,results/mhd_runner/divergence/mhd_ot_powell_source.csv,89,0.5,0,1.20715,8.00368,188.496,,0.349257,0.349791,0.00152899,0.0005340000000000344,-0.0992582,0.191356,0.0543921,non_positive_pressure,40,0
+orszag_tang,mixed_eglm,results/mhd_runner/divergence/mhd_ot_mixed_eglm.csv,385,0.5,1,0.129309,0.206916,3.14294,0.0147584,0.349257,0.349091,-0.000473693,-0.00016599999999999948,0.0586585,0.121265,,,768,0
+orszag_tang,gi_mixed_eglm,results/mhd_runner/divergence/mhd_ot_gi_mixed_eglm.csv,386,0.5,1,0.12974,0.21224,2.90755,0.0161933,0.349257,0.348109,-0.00328745,-0.0011479999999999824,0.0565912,0.122452,,,770,0

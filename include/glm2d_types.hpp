@@ -2,6 +2,11 @@
 
 #include <string>
 
+enum class CleaningEnergyPolicy {
+    ConserveTotalEnergy,
+    PreserveThermalPressure
+};
+
 struct GLM2DParams {
     int nx = 128;
     int ny = 128;
@@ -26,6 +31,9 @@ struct GLM2DParams {
     //   exp[-dt * ch^2 / cp^2].
     double ch = 1.0;
     double cp = 0.2;
+
+    CleaningEnergyPolicy energy_policy =
+        CleaningEnergyPolicy::ConserveTotalEnergy;
 
     // Velocity used only by the standalone Powell-like source toy model.
     // This is not the full Powell 8-wave MHD system.

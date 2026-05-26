@@ -74,6 +74,7 @@ struct MHDRunDiagnostics {
 
 struct BadStateRecord {
     bool found = false;
+    std::string stage;
     std::string reason;
     int i = -1;
     int j = -1;
@@ -101,6 +102,17 @@ struct CleaningAdvanceStats {
     double failure_time = std::numeric_limits<double>::quiet_NaN();
 };
 
+std::string cleaning_energy_policy_name(CleaningEnergyPolicy policy) {
+    switch (policy) {
+        case CleaningEnergyPolicy::ConserveTotalEnergy:
+            return "conserve_total_energy";
+        case CleaningEnergyPolicy::PreserveThermalPressure:
+            return "preserve_thermal_pressure";
+        default:
+            return "unknown";
+    }
+}
+
 double kinetic_energy_density(const State& cell) {
     const double rho = cell[RHO];
     if (!(rho > 0.0)) {
@@ -122,15 +134,17 @@ double magnetic_energy_density(const State& cell) {
     );
 }
 
-BadStateRecord scan_bad_state_after_cleaning(
+BadStateRecord scan_physical_state(
     const std::vector<State>& U,
     int nx,
     int ny,
     double dx,
     double dy,
-    double gamma
+    double gamma,
+    const std::string& stage
 ) {
     BadStateRecord out;
+    out.stage = stage;
 
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
@@ -156,6 +170,7 @@ BadStateRecord scan_bad_state_after_cleaning(
 
             if (!reason.empty()) {
                 out.found = true;
+                out.stage = stage;
                 out.reason = reason;
                 out.i = i;
                 out.j = j;
@@ -190,6 +205,8 @@ void write_cleaning_failure_csv(
       + params.glm.out_prefix
       + "_"
       + method
+      + "_"
+      + cleaning_energy_policy_name(params.glm.energy_policy)
       + "_failure.csv";
     ensure_parent_directory(filename);
 
@@ -198,12 +215,13 @@ void write_cleaning_failure_csv(
         throw std::runtime_error("Failed to open cleaning failure file: " + filename);
     }
 
-    fout << "problem,method,step,time,reason,i,j,"
+    fout << "problem,method,stage,step,time,reason,i,j,"
          << "rho,pressure,total_energy,kinetic_energy,magnetic_energy,"
-         << "internal_energy,Bx,By,Bz,psi,divB\n";
+         << "internal_energy,Bx,By,Bz,psi,divB,energy_policy\n";
 
     fout << params.problem << ","
          << method << ","
+         << bad.stage << ","
          << step << ","
          << time << ","
          << bad.reason << ","
@@ -219,7 +237,8 @@ void write_cleaning_failure_csv(
          << bad.By << ","
          << bad.Bz << ","
          << bad.psi << ","
-         << bad.divB << "\n";
+         << bad.divB << ","
+         << cleaning_energy_policy_name(params.glm.energy_policy) << "\n";
 }
 
 MHDRunDiagnostics compute_mhd_run_diagnostics(
@@ -389,13 +408,14 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
         }
 
         const BadStateRecord bad =
-            scan_bad_state_after_cleaning(
+            scan_physical_state(
                 U,
                 params.nx,
                 params.ny,
                 params.dx,
                 params.dy,
-                gamma
+                gamma,
+                "after_cleaning"
             );
 
         if (bad.found) {
@@ -997,6 +1017,126 @@ void run_mhd_2d_case(
         // Step 1: HLLD finite-volume update.
         rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt);
 
+        const double next_t = t + dt;
+        const int next_step = step + 1;
+
+        const BadStateRecord after_hydro_bad =
+            scan_physical_state(
+                U,
+                nx,
+                ny,
+                dx,
+                dy,
+                gamma,
+                "after_hydro"
+            );
+
+        if (after_hydro_bad.found) {
+            stopped_for_failure = true;
+            failure_time = next_t;
+            failure_reason = "hydro_positivity_failure:" + after_hydro_bad.reason;
+            write_cleaning_failure_csv(
+                params,
+                name,
+                next_step,
+                failure_time,
+                after_hydro_bad
+            );
+
+            const LocalDivBNorms failed_norms =
+                compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
+            const MHDRunDiagnostics failed_diag =
+                compute_mhd_run_diagnostics(U, gamma, dx * dy);
+
+            write_mhd_diagnostic_row(
+                diag,
+                next_step,
+                failure_time,
+                params.glm.dt,
+                failed_norms,
+                failed_diag,
+                0,
+                0,
+                std::numeric_limits<double>::quiet_NaN(),
+                true
+            );
+
+            std::cerr << "WARNING: stopping MHD run after hydro update produced bad state"
+                      << "  problem=" << params.problem
+                      << "  cleaning=" << name
+                      << "  step=" << next_step
+                      << "  time=" << failure_time
+                      << "  reason=" << after_hydro_bad.reason
+                      << "  cell=(" << after_hydro_bad.i
+                      << "," << after_hydro_bad.j << ")"
+                      << "  rho=" << after_hydro_bad.rho
+                      << "  p=" << after_hydro_bad.pressure
+                      << "\n";
+
+            t = failure_time;
+            step = next_step;
+            break;
+        }
+
+        const BadStateRecord before_cleaning_bad =
+            scan_physical_state(
+                U,
+                nx,
+                ny,
+                dx,
+                dy,
+                gamma,
+                "before_cleaning"
+            );
+
+        if (before_cleaning_bad.found) {
+            stopped_for_failure = true;
+            failure_time = next_t;
+            failure_reason =
+                "pre_cleaning_positivity_failure:" + before_cleaning_bad.reason;
+            write_cleaning_failure_csv(
+                params,
+                name,
+                next_step,
+                failure_time,
+                before_cleaning_bad
+            );
+
+            const LocalDivBNorms failed_norms =
+                compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
+            const MHDRunDiagnostics failed_diag =
+                compute_mhd_run_diagnostics(U, gamma, dx * dy);
+
+            write_mhd_diagnostic_row(
+                diag,
+                next_step,
+                failure_time,
+                params.glm.dt,
+                failed_norms,
+                failed_diag,
+                0,
+                0,
+                std::numeric_limits<double>::quiet_NaN(),
+                true
+            );
+
+            std::cerr << "WARNING: stopping MHD run before cleaning due to bad state"
+                      << "  problem=" << params.problem
+                      << "  cleaning=" << name
+                      << "  step=" << next_step
+                      << "  time=" << failure_time
+                      << "  reason=" << before_cleaning_bad.reason
+                      << "  cell=(" << before_cleaning_bad.i
+                      << "," << before_cleaning_bad.j << ")"
+                      << "  rho=" << before_cleaning_bad.rho
+                      << "  p=" << before_cleaning_bad.pressure
+                      << "\n";
+
+            t = failure_time;
+            step = next_step;
+            break;
+        }
+
         // Step 2: divergence-cleaning update (any CleaningType).
         const CleaningAdvanceStats cleaning_stats =
             apply_cleaning_with_subcycles(
@@ -1031,7 +1171,8 @@ void run_mhd_2d_case(
         if (cleaning_stats.bad_state.found) {
             stopped_for_failure = true;
             failure_time = cleaning_stats.failure_time;
-            failure_reason = cleaning_stats.bad_state.reason;
+            failure_reason =
+                "cleaning_induced_failure:" + cleaning_stats.bad_state.reason;
             t = failure_time;
 
             const LocalDivBNorms failed_norms =

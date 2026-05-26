@@ -21,6 +21,7 @@
 //    powell_source, mixed_eglm, gi_mixed_eglm
 // =============================================================================
 
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -46,8 +47,11 @@ const std::vector<CleaningType> ALL_CASES = {
 
 void print_usage(const char* prog) {
     std::cerr
-        << "Usage: " << prog << " [problem] [cleaning...]\n"
+        << "Usage: " << prog << " [--smoke] [--preserve-thermal-pressure] [problem] [cleaning...]\n"
         << "\n"
+        << "  --smoke   : run a fast low-resolution verification case.\n"
+        << "  --preserve-thermal-pressure\n"
+        << "             use explicit cleaning energy repair where supported.\n"
         << "  problem   : orszag_tang | brio_wu | field_loop\n"
         << "              divergence_advection  (default: orszag_tang + brio_wu)\n"
         << "  cleaning  : none | parabolic | hyperbolic_glm | mixed_glm\n"
@@ -80,22 +84,25 @@ void run_problem(
     double gamma,
     double t_end,
     int N,
-    const std::vector<CleaningType>& cases
+    const std::vector<CleaningType>& cases,
+    bool smoke,
+    CleaningEnergyPolicy energy_policy
 ) {
     MHDRunParams params;
     params.problem = problem;
     params.gamma   = gamma;
 
-    params.glm.nx = N;
-    params.glm.ny = N;
+    params.glm.nx = smoke ? 32 : N;
+    params.glm.ny = smoke ? 32 : N;
     params.glm.xlen = 1.0;
     params.glm.ylen = 1.0;
-    params.glm.t_end = t_end;
+    params.glm.t_end = smoke ? std::min(t_end, 0.02) : t_end;
     params.glm.cfl   = 0.4;
     params.glm.cp    = 0.2;
-    params.glm.write_snapshot = true;
+    params.glm.write_snapshot = !smoke;
     params.glm.write_initial_snapshot = false;
-    params.glm.out_prefix = prefix;
+    params.glm.out_prefix = smoke ? prefix + "_smoke" : prefix;
+    params.glm.energy_policy = energy_policy;
 
     for (CleaningType type : cases) {
         std::cout << "========================================\n";
@@ -109,29 +116,43 @@ void run_problem(
 } // namespace
 
 int main(int argc, char* argv[]) {
+    bool smoke = false;
+    CleaningEnergyPolicy energy_policy =
+        CleaningEnergyPolicy::ConserveTotalEnergy;
 
-    // -------------------------------------------------------------------------
-    // Help flag
-    // -------------------------------------------------------------------------
-    if (argc >= 2) {
-        const std::string first = argv[1];
-        if (first == "--help" || first == "-h") {
+    std::vector<std::string> positional;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
         }
+        if (arg == "--smoke") {
+            smoke = true;
+            continue;
+        }
+        if (arg == "--preserve-thermal-pressure") {
+            energy_policy = CleaningEnergyPolicy::PreserveThermalPressure;
+            continue;
+        }
+        if (arg == "--conserve-total-energy") {
+            energy_policy = CleaningEnergyPolicy::ConserveTotalEnergy;
+            continue;
+        }
+        positional.push_back(arg);
     }
 
     // -------------------------------------------------------------------------
-    // Problem selection  (argv[1], optional)
+    // Problem selection  (first positional argument, optional)
     // -------------------------------------------------------------------------
     using ProblemSpec = std::pair<std::string, std::string>;  // (problem, prefix)
     std::vector<ProblemSpec> problems;
 
-    if (argc < 2) {
+    if (positional.empty()) {
         // No arguments → run both problems.
         problems = {{"orszag_tang", "mhd_ot"}, {"brio_wu", "mhd_bw"}};
     } else {
-        const std::string p = argv[1];
+        const std::string p = positional[0];
         if (p == "orszag_tang") {
             problems = {{"orszag_tang", "mhd_ot"}};
         } else if (p == "brio_wu") {
@@ -152,13 +173,13 @@ int main(int argc, char* argv[]) {
     // -------------------------------------------------------------------------
     std::vector<CleaningType> cases;
 
-    if (argc < 3) {
+    if (positional.size() < 2) {
         // No cleaning arguments → run all methods.
         cases = ALL_CASES;
     } else {
-        for (int i = 2; i < argc; ++i) {
+        for (std::size_t i = 1; i < positional.size(); ++i) {
             try {
-                cases.push_back(parse_cleaning_type_2d(argv[i]));
+                cases.push_back(parse_cleaning_type_2d(positional[i]));
             } catch (const std::invalid_argument& e) {
                 std::cerr << e.what() << "\n\n";
                 print_usage(argv[0]);
@@ -191,7 +212,16 @@ int main(int argc, char* argv[]) {
         } else {
             throw std::runtime_error("Unhandled problem configuration: " + problem);
         }
-        run_problem(problem, prefix, gamma, t_end, 128, cases);
+        run_problem(
+            problem,
+            prefix,
+            gamma,
+            t_end,
+            128,
+            cases,
+            smoke,
+            energy_policy
+        );
     }
 
     std::cout << "\nAll selected MHD + cleaning cases finished.\n";

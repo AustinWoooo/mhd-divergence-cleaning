@@ -12,6 +12,13 @@ std::vector<CleaningType> selected_cleaning_cases_2d(
     const std::string& case_name
 );
 
+double max_cleaning_dt(
+    CleaningType method,
+    double dx,
+    double dy,
+    const GLM2DParams& params
+);
+
 void initialize_divergence_pulse_2d(
     std::vector<State>& U,
     const GLM2DParams& params

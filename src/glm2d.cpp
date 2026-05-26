@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -65,32 +66,20 @@ double compute_glm_2d_timestep(
     CleaningType type,
     const GLM2DParams& params
 ) {
-    const double inv_dx = 1.0 / params.dx;
-    const double inv_dy = 1.0 / params.dy;
-
-    if (type == CleaningType::PARABOLIC) {
-        // Explicit diffusion-like stability condition in 2D:
-        //
-        //   dt <= C / [ cp^2 (1/dx^2 + 1/dy^2) ].
-        //
-        // C <= 0.5 is the formal FTCS limit in 2D. We use min(cfl, 0.45)
-        // to prevent accidental unstable settings.
-        const double safe_cfl = std::min(params.cfl, 0.45);
-        return safe_cfl / (
-            params.cp * params.cp * (inv_dx * inv_dx + inv_dy * inv_dy)
-        );
-    }
-
     if (type == CleaningType::ELLIPTIC_PROJECTION) {
         // Projection is an instantaneous correction in this standalone test.
         return params.t_end > 0.0 ? params.t_end : 1.0;
     }
 
-    // Unsplit 2D hyperbolic CFL estimate:
-    //
-    //   dt <= C / [ ch (1/dx + 1/dy) ].
-    //
-    // This is safer than dt = C * min(dx,dy) / ch for a 2D unsplit update.
+    const double dt_clean =
+        max_cleaning_dt(type, params.dx, params.dy, params);
+
+    if (std::isfinite(dt_clean)) {
+        return dt_clean;
+    }
+
+    const double inv_dx = 1.0 / params.dx;
+    const double inv_dy = 1.0 / params.dy;
     return params.cfl / (params.ch * (inv_dx + inv_dy));
 }
 
@@ -126,6 +115,33 @@ std::vector<CleaningType> selected_cleaning_cases_2d(
     }
 
     return {parse_cleaning_type_2d(case_name)};
+}
+
+double max_cleaning_dt(
+    CleaningType method,
+    double dx,
+    double dy,
+    const GLM2DParams& params
+) {
+    const double inv_dx = 1.0 / dx;
+    const double inv_dy = 1.0 / dy;
+
+    if (method == CleaningType::PARABOLIC) {
+        constexpr double Cdiff = 0.4;
+        return Cdiff / (
+            2.0 * params.cp * params.cp
+          * (inv_dx * inv_dx + inv_dy * inv_dy)
+        );
+    }
+
+    if (method == CleaningType::HYPERBOLIC_GLM ||
+        method == CleaningType::MIXED_GLM ||
+        method == CleaningType::MIXED_EGLM ||
+        method == CleaningType::GI_MIXED_EGLM) {
+        return params.cfl / (params.ch * (inv_dx + inv_dy));
+    }
+
+    return std::numeric_limits<double>::infinity();
 }
 
 void initialize_divergence_pulse_2d(

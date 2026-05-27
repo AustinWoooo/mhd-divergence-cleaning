@@ -44,6 +44,27 @@ add_library(diagnostics
 )
 
 # ============================================================
+# Divergence-cleaning plugin library
+# ============================================================
+
+add_library(cleaning_plugins
+    include/cleaning_plugin.hpp
+    include/cleaning_plugin_utils.hpp
+    src/cleaning_plugin.cpp
+    src/cleaning_plugin_utils.cpp
+)
+
+add_executable(test_cleaning_plugins
+    tests/test_cleaning_plugins.cpp
+)
+
+target_link_libraries(test_cleaning_plugins
+    PRIVATE
+        cleaning_plugins
+        hlld
+)
+
+# ============================================================
 # 2D GLM library
 # ============================================================
 
@@ -129,6 +150,11 @@ enable_testing()
 add_test(
     NAME hlld_primitive_recovery
     COMMAND test_hlld_primitive_recovery
+)
+
+add_test(
+    NAME cleaning_plugins
+    COMMAND test_cleaning_plugins
 )
 
 add_test(

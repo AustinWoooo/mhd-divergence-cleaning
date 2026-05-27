@@ -48,6 +48,36 @@ inline State prim_to_state(const PrimState& W, double gamma) {
     return W.to_conserved(gamma);
 }
 
+// Minimum theta for the relaxed projection limiter (Task E).
+// Below this, the full projection cannot be made physical and we record the
+// failure.  Do NOT claim exact projection when theta < 1.
+constexpr double MIN_PROJECTION_THETA = 1.0 / 64.0;
+
+// -----------------------------------------------------------------------------
+//  Stage-level positivity diagnostics (Task A)
+// -----------------------------------------------------------------------------
+
+struct MinPhysical {
+    double min_pressure = std::numeric_limits<double>::infinity();
+    double min_density  = std::numeric_limits<double>::infinity();
+};
+
+// Task A: min pressure and density at each named stage.
+struct StagePressureMins {
+    double min_pressure_before_hydro       = std::numeric_limits<double>::infinity();
+    double min_density_before_hydro        = std::numeric_limits<double>::infinity();
+    double min_pressure_after_hydro        = std::numeric_limits<double>::infinity();
+    double min_density_after_hydro         = std::numeric_limits<double>::infinity();
+    double min_pressure_after_cleaning_B   = std::numeric_limits<double>::infinity();
+    double min_density_after_cleaning_B    = std::numeric_limits<double>::infinity();
+    double min_pressure_after_energy_repair= std::numeric_limits<double>::infinity();
+    double min_density_after_energy_repair = std::numeric_limits<double>::infinity();
+    double min_pressure_after_full_step    = std::numeric_limits<double>::infinity();
+    double min_density_after_full_step     = std::numeric_limits<double>::infinity();
+    // The earliest stage at which min_pressure first went non-positive.
+    std::string failure_stage;
+};
+
 struct MHDRunDiagnostics {
     double total_mass = 0.0;
     double total_momentum_x = 0.0;
@@ -93,6 +123,10 @@ struct CleaningAdvanceStats {
     bool projection_used = false;
     BadStateRecord bad_state;
     double failure_time = std::numeric_limits<double>::quiet_NaN();
+    // Task E: theta used for relaxed projection (1.0 = full, < 1 = partial).
+    double projection_theta = 1.0;
+    // Task A: per-stage minimums recorded during the cleaning substep.
+    StagePressureMins stage_mins;
 };
 
 std::string cleaning_energy_policy_name(CleaningEnergyPolicy policy) {
@@ -125,6 +159,36 @@ double magnetic_energy_density(const State& cell) {
       + cell[BY] * cell[BY]
       + cell[BZ] * cell[BZ]
     );
+}
+
+// Task A helper: compute min raw pressure and min density from a state vector.
+MinPhysical compute_min_physical(
+    const std::vector<State>& U,
+    double gamma
+) {
+    MinPhysical out;
+    for (const State& cell : U) {
+        const double rho = cell[RHO];
+        if (std::isfinite(rho)) {
+            out.min_density = std::min(out.min_density, rho);
+        }
+        if (std::isfinite(rho) && rho > 0.0) {
+            const double ke = kinetic_energy_density(cell);
+            const double me = magnetic_energy_density(cell);
+            const double internal = cell[E] - ke - me;
+            const double p = (gamma - 1.0) * internal;
+            if (std::isfinite(p)) {
+                out.min_pressure = std::min(out.min_pressure, p);
+            } else {
+                // non-finite pressure counts as a negative flag
+                out.min_pressure = std::min(
+                    out.min_pressure,
+                    -std::numeric_limits<double>::infinity()
+                );
+            }
+        }
+    }
+    return out;
 }
 
 BadStateRecord scan_physical_state(
@@ -186,12 +250,27 @@ BadStateRecord scan_physical_state(
     return out;
 }
 
+// Determine the failure_stage string from the StagePressureMins record.
+// Returns "none" if all minimums are positive (no failure).
+std::string determine_failure_stage(const StagePressureMins& sm) {
+    if (sm.min_pressure_before_hydro <= 0.0) return "before_hydro_step";
+    if (sm.min_pressure_after_hydro <= 0.0)  return "after_hydro_step";
+    if (sm.min_pressure_after_cleaning_B <= 0.0)    return "after_cleaning_B_update";
+    if (sm.min_pressure_after_energy_repair <= 0.0) return "after_cleaning_energy_repair";
+    if (sm.min_pressure_after_full_step <= 0.0)     return "after_full_step";
+    return "none";
+}
+
 void write_cleaning_failure_csv(
     const MHDRunParams& params,
     const std::string& method,
     int step,
     double time,
-    const BadStateRecord& bad
+    const BadStateRecord& bad,
+    const StagePressureMins& stage_mins,
+    double projection_theta,
+    int retry_count,
+    double min_dt_used
 ) {
     const std::string filename =
         "results/mhd_runner/failures/"
@@ -208,9 +287,24 @@ void write_cleaning_failure_csv(
         throw std::runtime_error("Failed to open cleaning failure file: " + filename);
     }
 
+    // Task A: include stage columns in the failure CSV.
     fout << "problem,method,stage,step,time,reason,i,j,"
          << "rho,pressure,total_energy,kinetic_energy,magnetic_energy,"
-         << "internal_energy,Bx,By,Bz,psi,divB,energy_policy\n";
+         << "internal_energy,Bx,By,Bz,psi,divB,energy_policy,"
+         << "failure_stage,"
+         << "min_pressure_before_hydro,min_pressure_after_hydro,"
+         << "min_pressure_after_cleaning_B,min_pressure_after_energy_repair,"
+         << "min_pressure_after_full_step,"
+         << "projection_theta,retry_count,min_dt_used\n";
+
+    const std::string fs_name =
+        stage_mins.failure_stage.empty()
+        ? determine_failure_stage(stage_mins)
+        : stage_mins.failure_stage;
+
+    auto write_double = [&](double v) {
+        if (std::isfinite(v)) fout << v; else fout << "";
+    };
 
     fout << params.problem << ","
          << method << ","
@@ -231,7 +325,22 @@ void write_cleaning_failure_csv(
          << bad.Bz << ","
          << bad.psi << ","
          << bad.divB << ","
-         << cleaning_energy_policy_name(params.glm.energy_policy) << "\n";
+         << cleaning_energy_policy_name(params.glm.energy_policy) << ","
+         << fs_name << ",";
+    write_double(stage_mins.min_pressure_before_hydro);
+    fout << ",";
+    write_double(stage_mins.min_pressure_after_hydro);
+    fout << ",";
+    write_double(stage_mins.min_pressure_after_cleaning_B);
+    fout << ",";
+    write_double(stage_mins.min_pressure_after_energy_repair);
+    fout << ",";
+    write_double(stage_mins.min_pressure_after_full_step);
+    fout << "," << projection_theta
+         << "," << retry_count
+         << ",";
+    write_double(min_dt_used);
+    fout << "\n";
 }
 
 MHDRunDiagnostics compute_mhd_run_diagnostics(
@@ -334,12 +443,64 @@ void preserve_thermal_pressure_after_cleaning(
     }
 }
 
+// Task E: Elliptic projection with a relaxed limiter for conserve_total_energy.
+//
+// Solves Poisson once, then tries B_new = B_old - theta * grad(phi) with
+// theta halved until the state is physical or theta < MIN_PROJECTION_THETA.
+// Records the theta used in the returned ProjectionResult.
+//
+// Only call this for ELLIPTIC_PROJECTION + ConserveTotalEnergy.
+// Do NOT use the returned result to claim exact div-cleaning if theta < 1.
+ProjectionResult apply_elliptic_projection_theta_limited(
+    std::vector<State>& U,
+    const GLM2DParams& params,
+    double gamma
+) {
+    std::vector<double> phi;
+    const ProjectionResult info = solve_projection_phi_2d(U, params, phi);
+
+    const std::vector<State> Upre = U;
+
+    double theta = 1.0;
+    bool found_physical = false;
+
+    while (theta >= MIN_PROJECTION_THETA) {
+        U = Upre;
+        apply_projection_B_correction_2d(U, phi, params, theta);
+
+        // Check that ALL cells have positive raw pressure.
+        const MinPhysical mp = compute_min_physical(U, gamma);
+        if (mp.min_pressure > 0.0) {
+            found_physical = true;
+            break;
+        }
+
+        theta *= 0.5;
+    }
+
+    if (!found_physical) {
+        // Apply minimum available theta even though state is still non-physical.
+        // The caller will detect this via the returned theta and bad-state scan.
+        U = Upre;
+        apply_projection_B_correction_2d(U, phi, params, theta);
+    }
+
+    ProjectionResult result = info;
+    result.projection_theta = theta;
+    return result;
+}
+
 ProjectionResult apply_cleaning_update_for_runner(
     std::vector<State>& U,
     CleaningType type,
-    const GLM2DParams& params
+    const GLM2DParams& params,
+    double gamma  // needed for theta-limiter (Task E)
 ) {
     if (type == CleaningType::ELLIPTIC_PROJECTION) {
+        if (params.energy_policy == CleaningEnergyPolicy::ConserveTotalEnergy) {
+            // Task E: use relaxed projection limiter.
+            return apply_elliptic_projection_theta_limited(U, params, gamma);
+        }
         return apply_elliptic_projection_2d(U, params);
     }
 
@@ -397,7 +558,7 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
         }
 
         const ProjectionResult projection =
-            apply_cleaning_update_for_runner(U, type, params);
+            apply_cleaning_update_for_runner(U, type, params, gamma);
 
         if (projection.iterations > 0 || type == CleaningType::ELLIPTIC_PROJECTION) {
             stats.projection_used = true;
@@ -408,10 +569,39 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
             stats.projection_true_residual = projection.true_residual_Linf;
             stats.projection_converged =
                 stats.projection_converged && projection.converged;
+            // Task E: record the theta used (may be < 1 for ConserveTotalEnergy).
+            stats.projection_theta = projection.projection_theta;
+            if (projection.projection_theta < 1.0) {
+                std::cout << "  [" << method_name << "] relaxed projection"
+                          << "  theta=" << projection.projection_theta
+                          << "  step=" << step << "\n";
+            }
+        }
+
+        // Task A: record min physical after B correction (before energy repair).
+        {
+            const MinPhysical mp = compute_min_physical(U, gamma);
+            stats.stage_mins.min_pressure_after_cleaning_B =
+                std::min(stats.stage_mins.min_pressure_after_cleaning_B,
+                         mp.min_pressure);
+            stats.stage_mins.min_density_after_cleaning_B =
+                std::min(stats.stage_mins.min_density_after_cleaning_B,
+                         mp.min_density);
         }
 
         if (repair_energy) {
             preserve_thermal_pressure_after_cleaning(U, Uold);
+        }
+
+        // Task A: record min physical after energy repair (or no-op if no repair).
+        {
+            const MinPhysical mp = compute_min_physical(U, gamma);
+            stats.stage_mins.min_pressure_after_energy_repair =
+                std::min(stats.stage_mins.min_pressure_after_energy_repair,
+                         mp.min_pressure);
+            stats.stage_mins.min_density_after_energy_repair =
+                std::min(stats.stage_mins.min_density_after_energy_repair,
+                         mp.min_density);
         }
 
         const BadStateRecord bad =
@@ -429,13 +619,6 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
             stats.bad_state = bad;
             stats.failure_time =
                 time + dt_sub * static_cast<double>(sub + 1);
-            write_cleaning_failure_csv(
-                run_params,
-                method_name,
-                step + 1,
-                stats.failure_time,
-                bad
-            );
             return stats;
         }
     }
@@ -538,13 +721,18 @@ std::vector<State> compute_rhs_hlld_2d(
 
 // -----------------------------------------------------------------------------
 //  Heun (RK2) update with HLLD fluxes only. Cleaning is applied separately.
+//
+//  Task C: when stage_glm_params != nullptr (project_each_stage), apply
+//  elliptic projection (and optional pressure-preserving energy repair) to the
+//  predictor state Us before computing the second-stage RHS.
 // -----------------------------------------------------------------------------
 
 void rk2_step_hlld_2d(
     std::vector<State>& U,
     int nx, int ny,
     double dx, double dy,
-    double gamma, double dt
+    double gamma, double dt,
+    const GLM2DParams* stage_glm_params   // non-null enables stage projection
 ) {
     const int ncell = nx * ny;
 
@@ -557,6 +745,39 @@ void rk2_step_hlld_2d(
         }
     }
 
+    // Task C: optional projection on the intermediate predictor state.
+    if (stage_glm_params != nullptr) {
+        GLM2DParams proj_params = *stage_glm_params;
+        proj_params.dt = dt;
+
+        const bool repair =
+            (proj_params.energy_policy ==
+             CleaningEnergyPolicy::PreserveThermalPressure);
+
+        std::vector<State> Us_pre;
+        if (repair) {
+            Us_pre = Us;
+        }
+
+        // For the stage projection, always apply the full theta=1 projection.
+        // (The theta limiter is applied at the end-of-step projection only.)
+        apply_elliptic_projection_2d(Us, proj_params);
+
+        if (repair) {
+            for (int id = 0; id < ncell; ++id) {
+                const double old_me =
+                    0.5 * (Us_pre[id][BX]*Us_pre[id][BX]
+                         + Us_pre[id][BY]*Us_pre[id][BY]
+                         + Us_pre[id][BZ]*Us_pre[id][BZ]);
+                const double new_me =
+                    0.5 * (Us[id][BX]*Us[id][BX]
+                         + Us[id][BY]*Us[id][BY]
+                         + Us[id][BZ]*Us[id][BZ]);
+                Us[id][E] = Us_pre[id][E] + (new_me - old_me);
+            }
+        }
+    }
+
     const std::vector<State> R2 = compute_rhs_hlld_2d(Us, nx, ny, dx, dy, gamma);
 
     for (int id = 0; id < ncell; ++id) {
@@ -564,6 +785,16 @@ void rk2_step_hlld_2d(
             U[id][k] = 0.5 * (U[id][k] + Us[id][k] + dt * R2[id][k]);
         }
     }
+}
+
+// Overload without stage projection (backward-compatible default).
+void rk2_step_hlld_2d(
+    std::vector<State>& U,
+    int nx, int ny,
+    double dx, double dy,
+    double gamma, double dt
+) {
+    rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt, nullptr);
 }
 
 // -----------------------------------------------------------------------------
@@ -666,7 +897,11 @@ void write_mhd_run_summary(
     long long cleaning_subcycles_total,
     long long projection_iterations_total,
     CleaningEnergyPolicy energy_policy,
-    double projection_true_residual
+    double projection_true_residual,
+    const StagePressureMins& stage_mins,
+    double projection_theta,
+    int retry_count,
+    double min_dt_used
 ) {
     const std::string filename =
         "results/mhd_runner/summaries/"
@@ -690,13 +925,24 @@ void write_mhd_run_summary(
     const std::string status =
         final_time_reached ? "finished" : "failed";
 
+    // Task A: add stage pressure columns to summary.
     out << "problem,method,status,final_time_reached,"
         << "failure_time,failure_reason,"
         << "final_L1_fv,final_L2_fv,final_Linf_fv,"
         << "energy_initial,energy_final,energy_drift,"
         << "min_raw_pressure,min_pressure,min_density,"
         << "energy_policy,projection_true_residual,"
-        << "cleaning_subcycles_total,projection_iterations_total\n";
+        << "cleaning_subcycles_total,projection_iterations_total,"
+        << "failure_stage,"
+        << "min_pressure_before_hydro,min_pressure_after_hydro,"
+        << "min_pressure_after_cleaning_B,min_pressure_after_energy_repair,"
+        << "min_pressure_after_full_step,"
+        << "projection_theta,retry_count,min_dt_used\n";
+
+    const std::string fs_name =
+        stage_mins.failure_stage.empty()
+        ? determine_failure_stage(stage_mins)
+        : stage_mins.failure_stage;
 
     out << params.problem << ","
          << method << ","
@@ -718,7 +964,22 @@ void write_mhd_run_summary(
     write_optional_double(out, projection_true_residual);
     out << ","
          << cleaning_subcycles_total << ","
-         << projection_iterations_total << "\n";
+         << projection_iterations_total << ","
+         << fs_name << ",";
+    write_optional_double(out, stage_mins.min_pressure_before_hydro);
+    out << ",";
+    write_optional_double(out, stage_mins.min_pressure_after_hydro);
+    out << ",";
+    write_optional_double(out, stage_mins.min_pressure_after_cleaning_B);
+    out << ",";
+    write_optional_double(out, stage_mins.min_pressure_after_energy_repair);
+    out << ",";
+    write_optional_double(out, stage_mins.min_pressure_after_full_step);
+    out << "," << projection_theta
+        << "," << retry_count
+        << ",";
+    write_optional_double(out, min_dt_used);
+    out << "\n";
 }
 
 } // namespace
@@ -914,6 +1175,12 @@ void run_mhd_2d_case(
     const double cfl   = params.glm.cfl;
     const double gamma = params.gamma;
 
+    // Task C: stage projection pointer (only for ELLIPTIC_PROJECTION runs with
+    // project_each_stage enabled).
+    const bool do_stage_projection =
+        (type == CleaningType::ELLIPTIC_PROJECTION) &&
+        params.glm.project_each_stage;
+
     // Initialize state.
     std::vector<State> U(nx * ny);
     if (params.problem == "orszag_tang") {
@@ -997,6 +1264,13 @@ void run_mhd_2d_case(
         std::numeric_limits<double>::quiet_NaN();
     bool last_projection_converged = true;
 
+    // Summary-level stage diagnostics: track minimums over the whole run
+    // (for the failure step specifically, and as global minimums).
+    StagePressureMins run_stage_mins;
+    double run_projection_theta = 1.0;
+    int    run_total_retries   = 0;
+    double run_min_dt_used     = std::numeric_limits<double>::infinity();
+
     while (true) {
         const LocalDivBNorms norms =
             compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
@@ -1046,20 +1320,49 @@ void run_mhd_2d_case(
         dt = std::min(dt, t_end - t);
         params.glm.dt = dt;
 
-        // Step 1: HLLD finite-volume update.  Projection/parabolic cleaning
-        // can create sharper magnetic corrections than the uncleaned baseline;
-        // if a trial hydro step violates positivity, retry the same pure-HLLD
-        // update with a smaller dt rather than modifying the Riemann solver.
-        const std::vector<State> U_before_hydro = U;
+        // =====================================================================
+        // Task A: record min physical BEFORE the hydro step.
+        // =====================================================================
+        StagePressureMins step_stage_mins;
+        {
+            const MinPhysical mp = compute_min_physical(U, gamma);
+            step_stage_mins.min_pressure_before_hydro = mp.min_pressure;
+            step_stage_mins.min_density_before_hydro  = mp.min_density;
+        }
+
+        // =====================================================================
+        // Tasks D + A: full-step retry loop.
+        //
+        // If the trial step (hydro + cleaning) produces non-positive raw pressure
+        // or density, reject it, halve dt, and retry up to max_step_retries
+        // (only for PARABOLIC and ELLIPTIC_PROJECTION which benefit from smaller
+        // dt for the cleaning step).
+        //
+        // Do NOT hide the failure by applying pressure floors.
+        // =====================================================================
+
+        const std::vector<State> U_begin = U;
+        const int max_retries =
+            benefits_from_hydro_retry(type) ? params.glm.max_step_retries : 0;
+        int total_retries = 0;
+        double min_dt_used = dt;
+
         BadStateRecord after_hydro_bad;
-        int hydro_retries = 0;
-        const int max_hydro_retries =
-            benefits_from_hydro_retry(type) ? 8 : 0;
+        CleaningAdvanceStats cleaning_stats;
 
         while (true) {
-            U = U_before_hydro;
+            U = U_begin;
             params.glm.dt = dt;
-            rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt);
+
+            // ------------------------------------------------------------------
+            // Step 1: HLLD finite-volume update.
+            // Task C: pass stage GLM params when project_each_stage is enabled.
+            // ------------------------------------------------------------------
+            if (do_stage_projection) {
+                rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt, &params.glm);
+            } else {
+                rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt, nullptr);
+            }
 
             after_hydro_bad =
                 scan_physical_state(
@@ -1069,37 +1372,122 @@ void run_mhd_2d_case(
                     dx,
                     dy,
                     gamma,
-                    "after_hydro"
+                    "after_hydro_step"
                 );
 
-            if (!after_hydro_bad.found || hydro_retries >= max_hydro_retries) {
+            if (after_hydro_bad.found) {
+                if (total_retries < max_retries) {
+                    dt *= 0.5;
+                    ++total_retries;
+                    continue;
+                }
+                // Retries exhausted.
                 break;
             }
 
-            dt *= 0.5;
-            ++hydro_retries;
+            // ------------------------------------------------------------------
+            // Step 2: divergence-cleaning update (any CleaningType).
+            // ------------------------------------------------------------------
+            cleaning_stats =
+                apply_cleaning_with_subcycles(
+                    U,
+                    type,
+                    params.glm,
+                    params,
+                    name,
+                    step,
+                    t,
+                    dt,
+                    gamma,
+                    type == CleaningType::PARABOLIC &&
+                        !printed_parabolic_subcycling
+                );
+
+            if (cleaning_stats.bad_state.found && total_retries < max_retries) {
+                // Cleaning failed: halve dt and retry the full step.
+                dt *= 0.5;
+                ++total_retries;
+                continue;
+            }
+
+            // Full step accepted (or retries exhausted).
+            min_dt_used = dt;
+            break;
         }
 
-        if (hydro_retries > 0 && !after_hydro_bad.found) {
-            std::cout << "  [" << name << "] hydro retry accepted"
-                      << "  retries=" << hydro_retries
-                      << "  step=" << step + 1
-                      << "  dt=" << dt << "\n";
+        // Record per-step stage minimums from the cleaning substep.
+        if (after_hydro_bad.found) {
+            step_stage_mins.min_pressure_after_hydro =
+                std::min(step_stage_mins.min_pressure_before_hydro,
+                         after_hydro_bad.pressure);
+        } else {
+            const MinPhysical mp_hydro = compute_min_physical(U, gamma);
+            step_stage_mins.min_pressure_after_hydro = mp_hydro.min_pressure;
+            step_stage_mins.min_density_after_hydro  = mp_hydro.min_density;
+        }
+
+        step_stage_mins.min_pressure_after_cleaning_B =
+            cleaning_stats.stage_mins.min_pressure_after_cleaning_B;
+        step_stage_mins.min_density_after_cleaning_B =
+            cleaning_stats.stage_mins.min_density_after_cleaning_B;
+        step_stage_mins.min_pressure_after_energy_repair =
+            cleaning_stats.stage_mins.min_pressure_after_energy_repair;
+        step_stage_mins.min_density_after_energy_repair =
+            cleaning_stats.stage_mins.min_density_after_energy_repair;
+
+        // Update global run minimums (for summary).
+        run_stage_mins.min_pressure_before_hydro = std::min(
+            run_stage_mins.min_pressure_before_hydro,
+            step_stage_mins.min_pressure_before_hydro);
+        run_stage_mins.min_pressure_after_hydro = std::min(
+            run_stage_mins.min_pressure_after_hydro,
+            step_stage_mins.min_pressure_after_hydro);
+        run_stage_mins.min_pressure_after_cleaning_B = std::min(
+            run_stage_mins.min_pressure_after_cleaning_B,
+            step_stage_mins.min_pressure_after_cleaning_B);
+        run_stage_mins.min_pressure_after_energy_repair = std::min(
+            run_stage_mins.min_pressure_after_energy_repair,
+            step_stage_mins.min_pressure_after_energy_repair);
+        run_total_retries = std::max(run_total_retries, total_retries);
+        run_min_dt_used   = std::min(run_min_dt_used, min_dt_used);
+        if (cleaning_stats.projection_theta < run_projection_theta) {
+            run_projection_theta = cleaning_stats.projection_theta;
         }
 
         const double next_t = t + dt;
         const int next_step = step + 1;
 
+        if (total_retries > 0 && !after_hydro_bad.found &&
+            !cleaning_stats.bad_state.found) {
+            std::cout << "  [" << name << "] step retry accepted"
+                      << "  retries=" << total_retries
+                      << "  step=" << next_step
+                      << "  dt=" << dt << "\n";
+        }
+
+        // ------------------------------------------------------------------
+        // Handle hydro failure (after retries exhausted).
+        // ------------------------------------------------------------------
         if (after_hydro_bad.found) {
             stopped_for_failure = true;
             failure_time = next_t;
-            failure_reason = "hydro_positivity_failure:" + after_hydro_bad.reason;
+            failure_reason =
+                "hydro_positivity_failure:" + after_hydro_bad.reason
+                + ":retries=" + std::to_string(total_retries);
+
+            step_stage_mins.failure_stage = "after_hydro_step";
+            run_stage_mins.failure_stage  = "after_hydro_step";
+
             write_cleaning_failure_csv(
                 params,
                 name,
                 next_step,
                 failure_time,
-                after_hydro_bad
+                after_hydro_bad,
+                step_stage_mins,
+                cleaning_stats.projection_theta,
+                total_retries,
+                min_dt_used
             );
 
             const LocalDivBNorms failed_norms =
@@ -1132,6 +1520,7 @@ void run_mhd_2d_case(
                       << "," << after_hydro_bad.j << ")"
                       << "  rho=" << after_hydro_bad.rho
                       << "  p=" << after_hydro_bad.pressure
+                      << "  retries=" << total_retries
                       << "\n";
 
             t = failure_time;
@@ -1139,6 +1528,11 @@ void run_mhd_2d_case(
             break;
         }
 
+        // ------------------------------------------------------------------
+        // Safety re-scan before cleaning (was "before_cleaning" in old code).
+        // With the retry loop, this should always pass if after_hydro passed,
+        // but we keep it as an explicit contract check.
+        // ------------------------------------------------------------------
         const BadStateRecord before_cleaning_bad =
             scan_physical_state(
                 U,
@@ -1155,12 +1549,20 @@ void run_mhd_2d_case(
             failure_time = next_t;
             failure_reason =
                 "pre_cleaning_positivity_failure:" + before_cleaning_bad.reason;
+
+            step_stage_mins.failure_stage = "after_hydro_step";
+            run_stage_mins.failure_stage  = "after_hydro_step";
+
             write_cleaning_failure_csv(
                 params,
                 name,
                 next_step,
                 failure_time,
-                before_cleaning_bad
+                before_cleaning_bad,
+                step_stage_mins,
+                1.0,
+                total_retries,
+                min_dt_used
             );
 
             const LocalDivBNorms failed_norms =
@@ -1200,22 +1602,6 @@ void run_mhd_2d_case(
             break;
         }
 
-        // Step 2: divergence-cleaning update (any CleaningType).
-        const CleaningAdvanceStats cleaning_stats =
-            apply_cleaning_with_subcycles(
-                U,
-                type,
-                params.glm,
-                params,
-                name,
-                step,
-                t,
-                dt,
-                gamma,
-                type == CleaningType::PARABOLIC &&
-                    !printed_parabolic_subcycling
-            );
-
         if (type == CleaningType::PARABOLIC && cleaning_stats.subcycles > 1) {
             printed_parabolic_subcycling = true;
         }
@@ -1235,11 +1621,40 @@ void run_mhd_2d_case(
         ++step;
         params.glm.dt = dt;
 
+        // Task A: record min physical after the full step.
+        {
+            const MinPhysical mp = compute_min_physical(U, gamma);
+            step_stage_mins.min_pressure_after_full_step = mp.min_pressure;
+            step_stage_mins.min_density_after_full_step  = mp.min_density;
+            run_stage_mins.min_pressure_after_full_step = std::min(
+                run_stage_mins.min_pressure_after_full_step,
+                mp.min_pressure);
+        }
+
         if (cleaning_stats.bad_state.found) {
             stopped_for_failure = true;
             failure_time = cleaning_stats.failure_time;
             failure_reason =
-                "cleaning_induced_failure:" + cleaning_stats.bad_state.reason;
+                "cleaning_induced_failure:" + cleaning_stats.bad_state.reason
+                + ":retries=" + std::to_string(total_retries);
+
+            // Determine failure stage from per-stage minimums.
+            step_stage_mins.failure_stage =
+                determine_failure_stage(step_stage_mins);
+            run_stage_mins.failure_stage = step_stage_mins.failure_stage;
+
+            write_cleaning_failure_csv(
+                params,
+                name,
+                step,
+                failure_time,
+                cleaning_stats.bad_state,
+                step_stage_mins,
+                cleaning_stats.projection_theta,
+                total_retries,
+                min_dt_used
+            );
+
             t = failure_time;
 
             const LocalDivBNorms failed_norms =
@@ -1272,6 +1687,9 @@ void run_mhd_2d_case(
                       << "," << cleaning_stats.bad_state.j << ")"
                       << "  rho=" << cleaning_stats.bad_state.rho
                       << "  p=" << cleaning_stats.bad_state.pressure
+                      << "  failure_stage=" << step_stage_mins.failure_stage
+                      << "  theta=" << cleaning_stats.projection_theta
+                      << "  retries=" << total_retries
                       << "\n";
             break;
         }
@@ -1317,7 +1735,11 @@ void run_mhd_2d_case(
         cleaning_subcycles_total,
         projection_iterations_total,
         params.glm.energy_policy,
-        last_projection_true_residual
+        last_projection_true_residual,
+        run_stage_mins,
+        run_projection_theta,
+        run_total_retries,
+        run_min_dt_used
     );
 
     std::cout << "  Wrote " << diag_name << "\n";

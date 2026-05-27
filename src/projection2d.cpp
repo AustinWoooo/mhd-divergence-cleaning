@@ -160,19 +160,20 @@ PoissonSolveResult solve_periodic_poisson_sor_5pt(
 
 } // namespace
 
-ProjectionResult apply_elliptic_projection_2d(
-    std::vector<State>& U,
-    const GLM2DParams& params
+// =============================================================================
+//  Public interface
+// =============================================================================
+
+ProjectionResult solve_projection_phi_2d(
+    const std::vector<State>& U,
+    const GLM2DParams& params,
+    std::vector<double>& phi_out
 ) {
     const int nx = params.nx;
     const int ny = params.ny;
-
     const double dx = params.dx;
     const double dy = params.dy;
 
-    // Compatible RHS:
-    //
-    //   Laplacian_5pt(phi) = div_fv(B).
     std::vector<double> rhs =
         compute_fv_divB_field_2d(U, nx, ny, dx, dy);
 
@@ -181,16 +182,27 @@ ProjectionResult apply_elliptic_projection_2d(
 
     const PoissonSolveResult solve =
         solve_periodic_poisson_sor_5pt(rhs, params);
-    const std::vector<double>& phi = solve.phi;
 
-    const std::vector<State> Uold = U;
+    phi_out = solve.phi;
+    return solve.info;
+}
+
+void apply_projection_B_correction_2d(
+    std::vector<State>& U,
+    const std::vector<double>& phi,
+    const GLM2DParams& params,
+    double theta
+) {
+    const int nx = params.nx;
+    const int ny = params.ny;
+    const double dx = params.dx;
+    const double dy = params.dy;
 
     for (int j = 0; j < ny; ++j) {
         const int jp = periodic_index(j + 1, ny);
 
         for (int i = 0; i < nx; ++i) {
             const int ip = periodic_index(i + 1, nx);
-
             const int id = idx2d(i, j, nx);
 
             const double dphi_dx =
@@ -199,23 +211,27 @@ ProjectionResult apply_elliptic_projection_2d(
             const double dphi_dy =
                 (phi[idx2d(i, jp, nx)] - phi[id]) / dy;
 
-            State cell = Uold[id];
-
             // Compatible projection:
-            //
-            //   B <- B - grad_fv(phi).
-            //
-            // With the div_fv operator above:
-            //
-            //   div_fv(B_new) = div_fv(B_old) - Laplacian_5pt(phi).
-            cell[BX] -= dphi_dx;
-            cell[BY] -= dphi_dy;
+            //   B <- B - theta * grad_fv(phi).
+            U[id][BX] -= theta * dphi_dx;
+            U[id][BY] -= theta * dphi_dy;
 
-            cell[PSI] = 0.0;
-
-            U[id] = cell;
+            U[id][PSI] = 0.0;
         }
     }
+}
 
-    return solve.info;
+ProjectionResult apply_elliptic_projection_2d(
+    std::vector<State>& U,
+    const GLM2DParams& params
+) {
+    std::vector<double> phi;
+    const ProjectionResult info = solve_projection_phi_2d(U, params, phi);
+
+    apply_projection_B_correction_2d(U, phi, params, 1.0);
+
+    // Full projection: theta = 1.
+    ProjectionResult result = info;
+    result.projection_theta = 1.0;
+    return result;
 }

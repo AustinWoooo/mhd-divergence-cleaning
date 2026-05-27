@@ -47,11 +47,17 @@ const std::vector<CleaningType> ALL_CASES = {
 
 void print_usage(const char* prog) {
     std::cerr
-        << "Usage: " << prog << " [--smoke] [--preserve-thermal-pressure] [problem] [cleaning...]\n"
+        << "Usage: " << prog
+        << " [--smoke] [--preserve-thermal-pressure] [--project-each-stage]"
+        << " [problem] [cleaning...]\n"
         << "\n"
         << "  --smoke   : run a fast low-resolution verification case.\n"
         << "  --preserve-thermal-pressure\n"
         << "             use explicit cleaning energy repair where supported.\n"
+        << "  --project-each-stage\n"
+        << "             (Task C) apply elliptic projection after each RK predictor\n"
+        << "             stage in addition to the end-of-step projection.\n"
+        << "             Only affects elliptic_projection runs.\n"
         << "  problem   : orszag_tang | brio_wu | field_loop\n"
         << "              divergence_advection  (default: orszag_tang + brio_wu)\n"
         << "  cleaning  : none | parabolic | hyperbolic_glm | mixed_glm\n"
@@ -75,7 +81,10 @@ void print_usage(const char* prog) {
         << "      Run divergence advection with three selected cleaning methods.\n"
         << "\n"
         << "  " << prog << " orszag_tang none mixed_glm hyperbolic_glm\n"
-        << "      Run Orszag-Tang with three selected cleaning methods.\n";
+        << "      Run Orszag-Tang with three selected cleaning methods.\n"
+        << "\n"
+        << "  " << prog << " orszag_tang elliptic_projection --project-each-stage\n"
+        << "      Run Orszag-Tang with stage-wise projection (Task C).\n";
 }
 
 void run_problem(
@@ -87,7 +96,8 @@ void run_problem(
     const std::vector<CleaningType>& cases,
     bool smoke,
     CleaningEnergyPolicy energy_policy,
-    bool energy_policy_explicit
+    bool energy_policy_explicit,
+    bool project_each_stage   // Task C
 ) {
     MHDRunParams params;
     params.problem = problem;
@@ -103,6 +113,7 @@ void run_problem(
     params.glm.write_snapshot = !smoke;
     params.glm.write_initial_snapshot = false;
     params.glm.out_prefix = smoke ? prefix + "_smoke" : prefix;
+    params.glm.project_each_stage = project_each_stage;
 
     for (CleaningType type : cases) {
         MHDRunParams method_params = params;
@@ -117,7 +128,12 @@ void run_problem(
 
         std::cout << "========================================\n";
         std::cout << " " << problem << " | cleaning = "
-                  << static_cast<int>(type) << "\n";
+                  << static_cast<int>(type);
+        if (project_each_stage &&
+            type == CleaningType::ELLIPTIC_PROJECTION) {
+            std::cout << " (project-each-stage)";
+        }
+        std::cout << "\n";
         std::cout << "========================================\n";
         run_mhd_2d_case(type, method_params);
     }
@@ -128,6 +144,7 @@ void run_problem(
 int main(int argc, char* argv[]) {
     bool smoke = false;
     bool energy_policy_explicit = false;
+    bool project_each_stage = false;  // Task C
     CleaningEnergyPolicy energy_policy =
         CleaningEnergyPolicy::ConserveTotalEnergy;
 
@@ -150,6 +167,11 @@ int main(int argc, char* argv[]) {
         if (arg == "--conserve-total-energy") {
             energy_policy = CleaningEnergyPolicy::ConserveTotalEnergy;
             energy_policy_explicit = true;
+            continue;
+        }
+        // Task C: apply projection after each RK predictor stage.
+        if (arg == "--project-each-stage") {
+            project_each_stage = true;
             continue;
         }
         positional.push_back(arg);
@@ -234,7 +256,8 @@ int main(int argc, char* argv[]) {
             cases,
             smoke,
             energy_policy,
-            energy_policy_explicit
+            energy_policy_explicit,
+            project_each_stage
         );
     }
 

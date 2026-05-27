@@ -62,5 +62,14 @@ struct GLM2DParams {
     bool write_snapshot = true;
     bool write_initial_snapshot = false;
 
+    // Task C: apply elliptic projection after each RK stage (predictor step),
+    // not just after the full Heun step.  Only affects ELLIPTIC_PROJECTION runs.
+    bool project_each_stage = false;
+
+    // Task D: maximum number of full-step retries when a trial step produces
+    // non-positive raw pressure or density.  Each retry halves dt.
+    // Only applies to PARABOLIC and ELLIPTIC_PROJECTION.
+    int max_step_retries = 8;
+
     std::string out_prefix = "glm_2d";
 };

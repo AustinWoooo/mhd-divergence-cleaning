@@ -41,6 +41,16 @@ constexpr int IPSI = PSI;
 // -----------------------------------------------------------------------------
 //  PrimState -- primitive variables W = [rho, u, v, w, p, Bx, By, Bz, psi]
 // -----------------------------------------------------------------------------
+struct PrimitiveRecoveryStatus {
+    bool valid = true;
+    bool rho_floored = false;
+    bool pressure_floored = false;
+    double raw_rho = 0.0;
+    double raw_pressure = 0.0;
+    double used_rho = 0.0;
+    double used_pressure = 0.0;
+};
+
 struct PrimState {
     double rho;
     double u, v, w;
@@ -56,6 +66,12 @@ struct PrimState {
 
     State to_conserved(double gamma) const;
     static PrimState from_conserved(const State& U, double gamma);
+    static PrimState from_conserved_raw(const State& U, double gamma);
+    static PrimState from_conserved_checked(
+        const State& U,
+        double gamma,
+        PrimitiveRecoveryStatus* status
+    );
 };
 
 // -----------------------------------------------------------------------------

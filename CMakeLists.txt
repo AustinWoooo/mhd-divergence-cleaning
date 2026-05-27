@@ -17,6 +17,15 @@ add_library(hlld
     src/hlld_solver.cpp
 )
 
+add_executable(test_hlld_primitive_recovery
+    tests/test_hlld_primitive_recovery.cpp
+)
+
+target_link_libraries(test_hlld_primitive_recovery
+    PRIVATE
+        hlld
+)
+
 # ============================================================
 # 1D GLM core library
 # ============================================================
@@ -109,4 +118,30 @@ add_executable(test_mhd_runner
 target_link_libraries(test_mhd_runner
     PRIVATE
         mhd_runner
+)
+
+# ============================================================
+# CTest registration
+# ============================================================
+
+enable_testing()
+
+add_test(
+    NAME hlld_primitive_recovery
+    COMMAND test_hlld_primitive_recovery
+)
+
+add_test(
+    NAME glm_1d
+    COMMAND test_glm_1d
+)
+
+add_test(
+    NAME glm_2d
+    COMMAND test_glm_2d
+)
+
+add_test(
+    NAME mhd_runner
+    COMMAND test_mhd_runner
 )

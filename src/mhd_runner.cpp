@@ -35,14 +35,13 @@ using namespace MHD;
 namespace {
 
 // -----------------------------------------------------------------------------
-//  Adapters between State (std::array<double,9>) and std::vector<double>
+//  State / primitive adapters.
 // -----------------------------------------------------------------------------
-//  HLLD_mhd_solver.hpp uses std::vector<double> for the conservative vector;
-//  the GLM pipeline uses State. The two layouts are identical (indexed by Var),
-//  so we just copy.
+//  Use raw primitive recovery here so diagnostics and failure detection see the
+//  physical state produced by the conservative update, not a repaired one.
 
 inline PrimState state_to_prim(const State& s, double gamma) {
-    return PrimState::from_conserved(s, gamma);
+    return PrimState::from_conserved_raw(s, gamma);
 }
 
 inline State prim_to_state(const PrimState& W, double gamma) {

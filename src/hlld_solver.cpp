@@ -7,6 +7,8 @@
 
 #include "HLLD_mhd_solver.hpp"
 
+#include <limits>
+
 namespace MHD {
 
 // -----------------------------------------------------------------------------
@@ -29,11 +31,9 @@ State PrimState::to_conserved(double gamma) const {
     return U;
 }
 
-PrimState PrimState::from_conserved(const State& U, double gamma) {
+PrimState PrimState::from_conserved_raw(const State& U, double gamma) {
     PrimState W;
-    // Density floor at the source so downstream KE / sound-speed calculations
-    // do not need to re-clamp.
-    W.rho = std::max(U[IDN], TINY_NUMBER);
+    W.rho = U[IDN];
     double inv_rho = 1.0 / W.rho;
     W.u  = U[IM1] * inv_rho;
     W.v  = U[IM2] * inv_rho;
@@ -43,12 +43,85 @@ PrimState PrimState::from_conserved(const State& U, double gamma) {
     W.Bz = U[IB3];
     double ke = 0.5 * W.rho * (W.u*W.u + W.v*W.v + W.w*W.w);
     double me = 0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);
-    // Pressure floor: strong shocks can produce p<0 via floating-point
-    // cancellation, which yields NaN in sqrt(gamma*p/rho).
-    double p_raw = (gamma - 1.0) * (U[IEN] - ke - me);
-    W.p = std::max(p_raw, TINY_NUMBER);
+    W.p = (gamma - 1.0) * (U[IEN] - ke - me);
     W.psi = U[IPSI];
     return W;
+}
+
+PrimState PrimState::from_conserved_checked(
+    const State& U,
+    double gamma,
+    PrimitiveRecoveryStatus* status
+) {
+    PrimitiveRecoveryStatus local_status;
+
+    local_status.raw_rho = U[IDN];
+    const double used_rho =
+        (std::isfinite(local_status.raw_rho) && local_status.raw_rho > TINY_NUMBER)
+      ? local_status.raw_rho
+      : TINY_NUMBER;
+    local_status.rho_floored = (used_rho != local_status.raw_rho);
+    local_status.used_rho = used_rho;
+
+    PrimState W;
+    W.rho = used_rho;
+    const double inv_rho = 1.0 / W.rho;
+    W.u  = U[IM1] * inv_rho;
+    W.v  = U[IM2] * inv_rho;
+    W.w  = U[IM3] * inv_rho;
+    W.Bx = U[IB1];
+    W.By = U[IB2];
+    W.Bz = U[IB3];
+
+    if (std::isfinite(local_status.raw_rho) && local_status.raw_rho != 0.0) {
+        const double inv_raw_rho = 1.0 / local_status.raw_rho;
+        const double raw_u = U[IM1] * inv_raw_rho;
+        const double raw_v = U[IM2] * inv_raw_rho;
+        const double raw_w = U[IM3] * inv_raw_rho;
+        const double raw_ke =
+            0.5 * local_status.raw_rho *
+            (raw_u*raw_u + raw_v*raw_v + raw_w*raw_w);
+        const double raw_me =
+            0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);
+        local_status.raw_pressure =
+            (gamma - 1.0) * (U[IEN] - raw_ke - raw_me);
+    } else {
+        local_status.raw_pressure =
+            std::numeric_limits<double>::quiet_NaN();
+    }
+
+    const double ke =
+        0.5 * W.rho * (W.u*W.u + W.v*W.v + W.w*W.w);
+    const double me =
+        0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);
+
+    const double checked_pressure =
+        (gamma - 1.0) * (U[IEN] - ke - me);
+
+    const double used_pressure =
+        (std::isfinite(checked_pressure) &&
+         checked_pressure > TINY_NUMBER)
+      ? checked_pressure
+      : TINY_NUMBER;
+    local_status.pressure_floored =
+        (used_pressure != local_status.raw_pressure);
+    local_status.used_pressure = used_pressure;
+    local_status.valid =
+        !local_status.rho_floored &&
+        !local_status.pressure_floored;
+
+    W.p = used_pressure;
+    W.psi = U[IPSI];
+
+    if (status != nullptr) {
+        *status = local_status;
+    }
+
+    return W;
+}
+
+PrimState PrimState::from_conserved(const State& U, double gamma) {
+    return from_conserved_raw(U, gamma);
 }
 
 // -----------------------------------------------------------------------------

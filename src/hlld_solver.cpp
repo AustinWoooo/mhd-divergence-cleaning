@@ -31,8 +31,10 @@ State PrimState::to_conserved(double gamma) const {
 
 PrimState PrimState::from_conserved(const State& U, double gamma) {
     PrimState W;
-    W.rho = U[IDN];
-    double inv_rho = 1.0 / std::max(W.rho, TINY_NUMBER);
+    // Density floor at the source so downstream KE / sound-speed calculations
+    // do not need to re-clamp.
+    W.rho = std::max(U[IDN], TINY_NUMBER);
+    double inv_rho = 1.0 / W.rho;
     W.u  = U[IM1] * inv_rho;
     W.v  = U[IM2] * inv_rho;
     W.w  = U[IM3] * inv_rho;
@@ -41,7 +43,10 @@ PrimState PrimState::from_conserved(const State& U, double gamma) {
     W.Bz = U[IB3];
     double ke = 0.5 * W.rho * (W.u*W.u + W.v*W.v + W.w*W.w);
     double me = 0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);
-    W.p = (gamma - 1.0) * (U[IEN] - ke - me);
+    // Pressure floor: strong shocks can produce p<0 via floating-point
+    // cancellation, which yields NaN in sqrt(gamma*p/rho).
+    double p_raw = (gamma - 1.0) * (U[IEN] - ke - me);
+    W.p = std::max(p_raw, TINY_NUMBER);
     W.psi = U[IPSI];
     return W;
 }
@@ -211,8 +216,16 @@ State hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
     State UL_s = make_U_star(rhoL_star, vL_s, wL_s, ByL_s, BzL_s, EL_s);
     State UR_s = make_U_star(rhoR_star, vR_s, wR_s, ByR_s, BzR_s, ER_s);
 
-    // Step 8: flux selection
-    bool degenerate = (Bn2 < TINY_NUMBER);
+    // Step 8: flux selection.
+    // Use a relative threshold: Bn is degenerate when its energy density is
+    // negligible compared to the total magnetic energy at the interface.
+    // An absolute threshold (e.g. Bn2 < 1e-20) would essentially never trigger
+    // in CGS / astrophysical units and let near-degenerate states feed
+    // unstable ** state formulas.
+    constexpr double DEGENERATE_REL_TOL = 1.0e-12;
+    double Btot2 = std::max(L.Bx*L.Bx + L.By*L.By + L.Bz*L.Bz,
+                            R.Bx*R.Bx + R.By*R.By + R.Bz*R.Bz);
+    bool degenerate = (Bn2 <= DEGENERATE_REL_TOL * Btot2);
 
     if (!degenerate) {
         double sgn_Bn = (Bn >= 0.0) ? 1.0 : -1.0;

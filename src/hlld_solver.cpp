@@ -13,8 +13,8 @@ namespace MHD {
 //  PrimState member functions
 // -----------------------------------------------------------------------------
 
-std::vector<double> PrimState::to_conserved(double gamma) const {
-    std::vector<double> U(NVAR);
+State PrimState::to_conserved(double gamma) const {
+    State U{};
     U[IDN] = rho;
     U[IM1] = rho * u;
     U[IM2] = rho * v;
@@ -29,10 +29,12 @@ std::vector<double> PrimState::to_conserved(double gamma) const {
     return U;
 }
 
-PrimState PrimState::from_conserved(const std::vector<double>& U, double gamma) {
+PrimState PrimState::from_conserved(const State& U, double gamma) {
     PrimState W;
-    W.rho = U[IDN];
-    double inv_rho = 1.0 / std::max(W.rho, TINY_NUMBER);
+    // Density floor at the source so downstream KE / sound-speed calculations
+    // do not need to re-clamp.
+    W.rho = std::max(U[IDN], TINY_NUMBER);
+    double inv_rho = 1.0 / W.rho;
     W.u  = U[IM1] * inv_rho;
     W.v  = U[IM2] * inv_rho;
     W.w  = U[IM3] * inv_rho;
@@ -41,7 +43,10 @@ PrimState PrimState::from_conserved(const std::vector<double>& U, double gamma) 
     W.Bz = U[IB3];
     double ke = 0.5 * W.rho * (W.u*W.u + W.v*W.v + W.w*W.w);
     double me = 0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);
-    W.p = (gamma - 1.0) * (U[IEN] - ke - me);
+    // Pressure floor: strong shocks can produce p<0 via floating-point
+    // cancellation, which yields NaN in sqrt(gamma*p/rho).
+    double p_raw = (gamma - 1.0) * (U[IEN] - ke - me);
+    W.p = std::max(p_raw, TINY_NUMBER);
     W.psi = U[IPSI];
     return W;
 }
@@ -53,19 +58,25 @@ PrimState PrimState::from_conserved(const std::vector<double>& U, double gamma) 
 PrimState rotate_to_normal(const PrimState& W, int direction) {
     if (direction == 0) {
         return W;
-    } else {
+    } else if (direction == 1) {
+        // Cyclic permutation (x,y,z) -> (y,z,x): make Y the normal axis.
         PrimState Wr = W;
         Wr.u  = W.v;   Wr.v  = W.w;   Wr.w  = W.u;
         Wr.Bx = W.By;  Wr.By = W.Bz;  Wr.Bz = W.Bx;
         return Wr;
     }
+    // A third direction (Z-flux) would require a *different* permutation
+    // (x,y,z) -> (z,x,y); refuse rather than silently apply the Y rotation.
+    throw std::invalid_argument(
+        "rotate_to_normal: direction must be 0 (X) or 1 (Y)");
 }
 
-std::vector<double> rotate_flux_back(const std::vector<double>& F, int direction) {
+State rotate_flux_back(const State& F, int direction) {
     if (direction == 0) {
         return F;
-    } else {
-        std::vector<double> Fb(NVAR);
+    } else if (direction == 1) {
+        // Inverse of the (x,y,z) -> (y,z,x) permutation applied above.
+        State Fb{};
         Fb[IDN] = F[IDN];
         Fb[IEN] = F[IEN];
         Fb[IM1] = F[IM3];
@@ -77,6 +88,8 @@ std::vector<double> rotate_flux_back(const std::vector<double>& F, int direction
         Fb[IPSI] = F[IPSI];
         return Fb;
     }
+    throw std::invalid_argument(
+        "rotate_flux_back: direction must be 0 (X) or 1 (Y)");
 }
 
 // -----------------------------------------------------------------------------
@@ -93,8 +106,8 @@ double fast_magnetosonic_speed(const PrimState& W, double gamma) {
     return std::sqrt(std::max(0.5 * (term + std::sqrt(disc)), 0.0));
 }
 
-std::vector<double> physical_flux(const PrimState& W, double gamma) {
-    std::vector<double> F(NVAR);
+State physical_flux(const PrimState& W, double gamma) {
+    State F{};
     double pmag = 0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);
     double ptot = W.p + pmag;
     double vdotB = W.u*W.Bx + W.v*W.By + W.w*W.Bz;
@@ -116,7 +129,13 @@ std::vector<double> physical_flux(const PrimState& W, double gamma) {
 //  HLLD Riemann solver (normal frame)
 // -----------------------------------------------------------------------------
 
-std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
+State hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
+    // Relative tolerance used by every near-degeneracy check below. An
+    // absolute threshold scaled by TINY_NUMBER (1e-20) would essentially
+    // never fire in physical units; comparing |x| <= REL_TOL * scale catches
+    // genuine cancellations without being unit-dependent.
+    constexpr double REL_TOL = 1.0e-12;
+
     // Enforce a unique normal B at the interface.
     double Bn = 0.5 * (WL.Bx + WR.Bx);
     PrimState L = WL; L.Bx = Bn;
@@ -130,10 +149,10 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
     double SR = std::max(L.u + cfL, R.u + cfR);
 
     // Step 2: conserved variables and physical fluxes
-    std::vector<double> UL = L.to_conserved(gamma);
-    std::vector<double> UR = R.to_conserved(gamma);
-    std::vector<double> FL = physical_flux(L, gamma);
-    std::vector<double> FR = physical_flux(R, gamma);
+    State UL = L.to_conserved(gamma);
+    State UR = R.to_conserved(gamma);
+    State FL = physical_flux(L, gamma);
+    State FR = physical_flux(R, gamma);
 
     if (SL >= 0.0) return FL;
     if (SR <= 0.0) return FR;
@@ -160,12 +179,19 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
     double SLs = SM - std::abs(Bn) / sqrtRhoLs;
     double SRs = SM + std::abs(Bn) / sqrtRhoRs;
 
-    // Step 6: star-state tangential velocity and magnetic field
+    // Step 6: star-state tangential velocity and magnetic field.
+    // denom = rho*(S-u)*(S-SM) - Bn^2 vanishes at the Alfven resonance;
+    // when it does, the jumps across the Alfven wave collapse and (v_t, B_t)
+    // should fall back to the upstream values.
     auto compute_star_tangential = [&](const PrimState& W, double S, double sMu,
                                        double& vs, double& ws,
                                        double& Bys, double& Bzs) {
-        double denom = W.rho * sMu * (S - SM) - Bn2;
-        if (std::abs(denom) < TINY_NUMBER * W.rho * sMu * sMu) {
+        double term_fluid = W.rho * sMu * (S - SM);
+        double denom = term_fluid - Bn2;
+        // Relative threshold against the magnitudes of the two component
+        // terms, so the test is invariant to the choice of units.
+        double scale = std::abs(term_fluid) + Bn2;
+        if (std::abs(denom) <= REL_TOL * scale) {
             vs = W.v;  ws = W.w;
             Bys = W.By; Bzs = W.Bz;
         } else {
@@ -196,7 +222,7 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
 
     auto make_U_star = [&](double rho_s, double v_s, double w_s,
                            double By_s, double Bz_s, double E_s) {
-        std::vector<double> Us(NVAR);
+        State Us{};
         Us[IDN] = rho_s;
         Us[IM1] = rho_s * SM;
         Us[IM2] = rho_s * v_s;
@@ -205,13 +231,20 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
         Us[IB1] = Bn;
         Us[IB2] = By_s;
         Us[IB3] = Bz_s;
+        Us[IPSI] = 0.0;
         return Us;
     };
-    std::vector<double> UL_s = make_U_star(rhoL_star, vL_s, wL_s, ByL_s, BzL_s, EL_s);
-    std::vector<double> UR_s = make_U_star(rhoR_star, vR_s, wR_s, ByR_s, BzR_s, ER_s);
+    State UL_s = make_U_star(rhoL_star, vL_s, wL_s, ByL_s, BzL_s, EL_s);
+    State UR_s = make_U_star(rhoR_star, vR_s, wR_s, ByR_s, BzR_s, ER_s);
 
-    // Step 8: flux selection
-    bool degenerate = (Bn2 < TINY_NUMBER);
+    // Step 8: flux selection.
+    // Bn is degenerate when its energy density is negligible compared to the
+    // total magnetic energy at the interface; in that case the ** state
+    // formulas (which divide by sqrt(rho*)·sgn(Bn) combinations) lose
+    // significance, so we collapse to the * state.
+    double Btot2 = std::max(L.Bx*L.Bx + L.By*L.By + L.Bz*L.Bz,
+                            R.Bx*R.Bx + R.By*R.By + R.Bz*R.Bz);
+    bool degenerate = (Bn2 <= REL_TOL * Btot2);
 
     if (!degenerate) {
         double sgn_Bn = (Bn >= 0.0) ? 1.0 : -1.0;
@@ -232,7 +265,7 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
         double ER_ss = ER_s + sqrtRhoRs * (vBRs - vB_ss) * sgn_Bn;
 
         auto make_U_ss = [&](double rho_ss, double E_ss) {
-            std::vector<double> Uss(NVAR);
+            State Uss{};
             Uss[IDN] = rho_ss;
             Uss[IM1] = rho_ss * SM;
             Uss[IM2] = rho_ss * v_ss;
@@ -241,12 +274,13 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
             Uss[IB1] = Bn;
             Uss[IB2] = By_ss;
             Uss[IB3] = Bz_ss;
+            Uss[IPSI] = 0.0;
             return Uss;
         };
-        std::vector<double> UL_ss = make_U_ss(rhoL_star, EL_ss);
-        std::vector<double> UR_ss = make_U_ss(rhoR_star, ER_ss);
+        State UL_ss = make_U_ss(rhoL_star, EL_ss);
+        State UR_ss = make_U_ss(rhoR_star, ER_ss);
 
-        std::vector<double> F(NVAR);
+        State F{};
         if (SLs >= 0.0) {
             for (int i = 0; i < NVAR; ++i)
                 F[i] = FL[i] + SL * (UL_s[i] - UL[i]);
@@ -263,7 +297,7 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
         F[IPSI] = 0.0;
         return F;
     } else {
-        std::vector<double> F(NVAR);
+        State F{};
         if (SM >= 0.0) {
             for (int i = 0; i < NVAR; ++i)
                 F[i] = FL[i] + SL * (UL_s[i] - UL[i]);
@@ -280,14 +314,12 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
 //  Public interface
 // -----------------------------------------------------------------------------
 
-std::vector<double> compute_flux(const PrimState& W_L, const PrimState& W_R,
-                                 int direction, double gamma) {
-    if (direction != 0 && direction != 1) {
-        throw std::invalid_argument("direction must be 0 (X) or 1 (Y)");
-    }
+State compute_flux(const PrimState& W_L, const PrimState& W_R,
+                   int direction, double gamma) {
+    // rotate_to_normal / rotate_flux_back validate `direction` and throw.
     PrimState L_rot = rotate_to_normal(W_L, direction);
     PrimState R_rot = rotate_to_normal(W_R, direction);
-    std::vector<double> F_rot = hlld_flux_normal(L_rot, R_rot, gamma);
+    State F_rot = hlld_flux_normal(L_rot, R_rot, gamma);
     return rotate_flux_back(F_rot, direction);
 }
 

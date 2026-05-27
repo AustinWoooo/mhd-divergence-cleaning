@@ -54,8 +54,8 @@ struct PrimState {
               double pp, double bx, double by, double bz, double ps = 0.0)
         : rho(r), u(uu), v(vv), w(ww), p(pp), Bx(bx), By(by), Bz(bz), psi(ps) {}
 
-    std::vector<double> to_conserved(double gamma) const;
-    static PrimState from_conserved(const std::vector<double>& U, double gamma);
+    State to_conserved(double gamma) const;
+    static PrimState from_conserved(const State& U, double gamma);
 };
 
 // -----------------------------------------------------------------------------
@@ -64,17 +64,17 @@ struct PrimState {
 
 PrimState rotate_to_normal(const PrimState& W, int direction);
 
-std::vector<double> rotate_flux_back(const std::vector<double>& F, int direction);
+State rotate_flux_back(const State& F, int direction);
 
 double fast_magnetosonic_speed(const PrimState& W, double gamma);
 
-std::vector<double> physical_flux(const PrimState& W, double gamma);
+State physical_flux(const PrimState& W, double gamma);
 
-std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma);
+State hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma);
 
 // Public interface: rotate to normal frame -> HLLD -> rotate flux back.
 // direction = 0 (X-flux) or 1 (Y-flux).
-std::vector<double> compute_flux(const PrimState& W_L, const PrimState& W_R,
-                                 int direction, double gamma);
+State compute_flux(const PrimState& W_L, const PrimState& W_R,
+                   int direction, double gamma);
 
 } // namespace MHD

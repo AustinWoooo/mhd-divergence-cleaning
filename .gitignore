@@ -22,5 +22,6 @@ __pycache__/
 # Editor files
 .vscode/
 .idea/
+.venv/
 *~
 .DS_Store

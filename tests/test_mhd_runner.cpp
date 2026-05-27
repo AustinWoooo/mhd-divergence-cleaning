@@ -86,7 +86,8 @@ void run_problem(
     int N,
     const std::vector<CleaningType>& cases,
     bool smoke,
-    CleaningEnergyPolicy energy_policy
+    CleaningEnergyPolicy energy_policy,
+    bool energy_policy_explicit
 ) {
     MHDRunParams params;
     params.problem = problem;
@@ -102,14 +103,23 @@ void run_problem(
     params.glm.write_snapshot = !smoke;
     params.glm.write_initial_snapshot = false;
     params.glm.out_prefix = smoke ? prefix + "_smoke" : prefix;
-    params.glm.energy_policy = energy_policy;
 
     for (CleaningType type : cases) {
+        MHDRunParams method_params = params;
+        method_params.glm.energy_policy = energy_policy;
+
+        if (!energy_policy_explicit &&
+            (type == CleaningType::PARABOLIC ||
+             type == CleaningType::ELLIPTIC_PROJECTION)) {
+            method_params.glm.energy_policy =
+                CleaningEnergyPolicy::PreserveThermalPressure;
+        }
+
         std::cout << "========================================\n";
         std::cout << " " << problem << " | cleaning = "
                   << static_cast<int>(type) << "\n";
         std::cout << "========================================\n";
-        run_mhd_2d_case(type, params);
+        run_mhd_2d_case(type, method_params);
     }
 }
 
@@ -117,6 +127,7 @@ void run_problem(
 
 int main(int argc, char* argv[]) {
     bool smoke = false;
+    bool energy_policy_explicit = false;
     CleaningEnergyPolicy energy_policy =
         CleaningEnergyPolicy::ConserveTotalEnergy;
 
@@ -133,10 +144,12 @@ int main(int argc, char* argv[]) {
         }
         if (arg == "--preserve-thermal-pressure") {
             energy_policy = CleaningEnergyPolicy::PreserveThermalPressure;
+            energy_policy_explicit = true;
             continue;
         }
         if (arg == "--conserve-total-energy") {
             energy_policy = CleaningEnergyPolicy::ConserveTotalEnergy;
+            energy_policy_explicit = true;
             continue;
         }
         positional.push_back(arg);
@@ -220,7 +233,8 @@ int main(int argc, char* argv[]) {
             128,
             cases,
             smoke,
-            energy_policy
+            energy_policy,
+            energy_policy_explicit
         );
     }
 

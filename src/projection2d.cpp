@@ -29,6 +29,49 @@ struct PoissonSolveResult {
     ProjectionResult info;
 };
 
+ProjectionResult compute_true_poisson_residual(
+    const std::vector<double>& phi,
+    const std::vector<double>& rhs,
+    ProjectionResult info,
+    const GLM2DParams& params
+) {
+    const int nx = params.nx;
+    const int ny = params.ny;
+
+    const double inv_dx2 = 1.0 / (params.dx * params.dx);
+    const double inv_dy2 = 1.0 / (params.dy * params.dy);
+    const double ncell = static_cast<double>(nx * ny);
+
+    double sum_sq = 0.0;
+    double max_abs = 0.0;
+
+    for (int j = 0; j < ny; ++j) {
+        const int jp = periodic_index(j + 1, ny);
+        const int jm = periodic_index(j - 1, ny);
+
+        for (int i = 0; i < nx; ++i) {
+            const int ip = periodic_index(i + 1, nx);
+            const int im = periodic_index(i - 1, nx);
+            const int id = idx2d(i, j, nx);
+
+            const double lap =
+                (phi[idx2d(ip, j, nx)] - 2.0 * phi[id] + phi[idx2d(im, j, nx)])
+                    * inv_dx2
+              + (phi[idx2d(i, jp, nx)] - 2.0 * phi[id] + phi[idx2d(i, jm, nx)])
+                    * inv_dy2;
+
+            const double residual = lap - rhs[id];
+            sum_sq += residual * residual;
+            max_abs = std::max(max_abs, std::abs(residual));
+        }
+    }
+
+    info.true_residual_L2 = std::sqrt(sum_sq / ncell);
+    info.true_residual_Linf = max_abs;
+    info.final_residual = max_abs;
+    return info;
+}
+
 PoissonSolveResult solve_periodic_poisson_sor_5pt(
     const std::vector<double>& rhs_input,
     const GLM2DParams& params
@@ -95,7 +138,7 @@ PoissonSolveResult solve_periodic_poisson_sor_5pt(
         }
 
         info.iterations = iter + 1;
-        info.final_residual = max_update;
+        info.solver_update_residual = max_update;
 
         if (max_update < params.poisson_tol) {
             info.converged = true;
@@ -107,10 +150,11 @@ PoissonSolveResult solve_periodic_poisson_sor_5pt(
 
     if (params.poisson_max_iter == 0) {
         info.iterations = 0;
-        info.final_residual = max_update;
+        info.solver_update_residual = max_update;
         info.converged = false;
     }
 
+    info = compute_true_poisson_residual(phi, rhs, info, params);
     return {phi, info};
 }
 

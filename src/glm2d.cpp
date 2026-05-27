@@ -83,6 +83,17 @@ double compute_glm_2d_timestep(
     return params.cfl / (params.ch * (inv_dx + inv_dy));
 }
 
+bool all_state_values_finite(const std::vector<State>& U) {
+    for (const State& cell : U) {
+        for (double value : cell) {
+            if (!std::isfinite(value)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 CleaningType parse_cleaning_type_2d(const std::string& name) {
@@ -127,11 +138,9 @@ double max_cleaning_dt(
     const double inv_dy = 1.0 / dy;
 
     if (method == CleaningType::PARABOLIC) {
-        constexpr double Cdiff = 0.4;
-        return Cdiff / (
-            2.0 * params.cp * params.cp
-          * (inv_dx * inv_dx + inv_dy * inv_dy)
-        );
+        constexpr double Cdiff = 0.20;
+        const double h = std::min(dx, dy);
+        return Cdiff * h * h / (params.cp * params.cp);
     }
 
     if (method == CleaningType::HYPERBOLIC_GLM ||
@@ -454,6 +463,15 @@ void run_glm_2d_case(
         }
 
         advance_glm_2d_one_step(U, type, params);
+
+        if (!all_state_values_finite(U)) {
+            throw std::runtime_error(
+                "run_glm_2d_case: nonfinite state after "
+              + name
+              + " update at step "
+              + std::to_string(step + 1)
+            );
+        }
     }
 
     if (params.write_snapshot) {

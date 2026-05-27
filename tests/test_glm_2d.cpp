@@ -1,4 +1,5 @@
 #include <cassert>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -17,6 +18,38 @@ namespace {
 
 bool approx_equal(double a, double b, double tol = 1.0e-12) {
     return std::abs(a - b) <= tol;
+}
+
+double raw_pressure(const State& cell, double gamma) {
+    const double rho = cell[RHO];
+    const double ux = cell[MX] / rho;
+    const double uy = cell[MY] / rho;
+    const double uz = cell[MZ] / rho;
+    const double kinetic =
+        0.5 * rho * (ux * ux + uy * uy + uz * uz);
+    const double magnetic =
+        0.5 * (
+            cell[BX] * cell[BX]
+          + cell[BY] * cell[BY]
+          + cell[BZ] * cell[BZ]
+        );
+    return (gamma - 1.0) * (cell[E] - kinetic - magnetic);
+}
+
+void set_total_energy_from_pressure(State& cell, double pressure, double gamma) {
+    const double rho = cell[RHO];
+    const double ux = cell[MX] / rho;
+    const double uy = cell[MY] / rho;
+    const double uz = cell[MZ] / rho;
+    const double kinetic =
+        0.5 * rho * (ux * ux + uy * uy + uz * uz);
+    const double magnetic =
+        0.5 * (
+            cell[BX] * cell[BX]
+          + cell[BY] * cell[BY]
+          + cell[BZ] * cell[BZ]
+        );
+    cell[E] = pressure / (gamma - 1.0) + kinetic + magnetic;
 }
 
 void fill_divergent_test_state(std::vector<State>& U, int nx, int ny) {
@@ -55,6 +88,16 @@ void assert_all_finite(const std::vector<State>& U) {
         for (double value : cell) {
             assert(std::isfinite(value));
         }
+    }
+}
+
+void assert_positive_raw_pressure(
+    const std::vector<State>& U,
+    double gamma
+) {
+    for (const State& cell : U) {
+        assert(cell[RHO] > 0.0);
+        assert(raw_pressure(cell, gamma) > 0.0);
     }
 }
 
@@ -274,18 +317,78 @@ void test_projection_reduces_fv_divB() {
     const LocalDivBNorms initial =
         compute_fv_divB_norms_2d(U, params.nx, params.ny, params.dx, params.dy);
 
-    apply_elliptic_projection_2d(U, params);
+    const ProjectionResult projection =
+        apply_elliptic_projection_2d(U, params);
 
     const LocalDivBNorms final =
         compute_fv_divB_norms_2d(U, params.nx, params.ny, params.dx, params.dy);
 
     assert_all_finite(U);
+    assert(std::isfinite(projection.true_residual_Linf));
+    assert(projection.true_residual_Linf < 1.0e-7);
     assert(initial.L2 > 0.0);
     assert(final.L2 < initial.L2);
 
     const double reduction = final.L2 / initial.L2;
     std::cout << "Projection FV L2 reduction factor: " << reduction << "\n";
     assert(reduction < 1.0e-3);
+}
+
+void test_projection_preserves_uniform_field() {
+    GLM2DParams params;
+    params.nx = 16;
+    params.ny = 16;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+
+    std::vector<State> U(params.nx * params.ny);
+    for (State& cell : U) {
+        cell.fill(0.0);
+        cell[RHO] = 1.0;
+        cell[BX] = 0.7;
+        cell[BY] = -0.2;
+        cell[BZ] = 0.1;
+        cell[E] = 2.0;
+    }
+
+    const std::vector<State> Uold = U;
+    const ProjectionResult projection =
+        apply_elliptic_projection_2d(U, params);
+
+    assert_all_finite(U);
+    assert(projection.true_residual_Linf < 1.0e-12);
+    for (std::size_t id = 0; id < U.size(); ++id) {
+        assert(approx_equal(U[id][BX], Uold[id][BX]));
+        assert(approx_equal(U[id][BY], Uold[id][BY]));
+        assert(approx_equal(U[id][BZ], Uold[id][BZ]));
+    }
+    std::cout << "Projection uniform-field assertion passed.\n";
+}
+
+void test_projection_moderate_case_keeps_pressure_positive() {
+    constexpr double gamma = 5.0 / 3.0;
+    GLM2DParams params;
+    params.nx = 32;
+    params.ny = 32;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+    params.poisson_max_iter = 50000;
+    params.poisson_tol = 1.0e-11;
+
+    std::vector<State> U(params.nx * params.ny);
+    fill_divergent_test_state(U, params.nx, params.ny);
+    for (State& cell : U) {
+        cell[RHO] = 1.0;
+        cell[MX] = 0.05;
+        cell[MY] = -0.02;
+        cell[MZ] = 0.0;
+        set_total_energy_from_pressure(cell, 1.0, gamma);
+    }
+
+    apply_elliptic_projection_2d(U, params);
+    assert_all_finite(U);
+    assert_positive_raw_pressure(U, gamma);
+    std::cout << "Projection pressure assertion passed.\n";
 }
 
 void test_parabolic_reduces_fv_divB() {
@@ -315,6 +418,130 @@ void test_parabolic_reduces_fv_divB() {
     assert(final.L2 < initial.L2);
     std::cout << "Parabolic FV L2 reduction factor: "
               << final.L2 / initial.L2 << "\n";
+}
+
+void test_parabolic_moderate_case_keeps_pressure_positive() {
+    constexpr double gamma = 5.0 / 3.0;
+    GLM2DParams params;
+    params.nx = 32;
+    params.ny = 32;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+    params.cp = 0.2;
+    params.dt = 0.2 * params.dx * params.dx / (params.cp * params.cp);
+
+    std::vector<State> U(params.nx * params.ny);
+    fill_divergent_test_state(U, params.nx, params.ny);
+    for (State& cell : U) {
+        cell[RHO] = 1.0;
+        cell[MX] = 0.05;
+        cell[MY] = -0.02;
+        cell[MZ] = 0.0;
+        set_total_energy_from_pressure(cell, 1.0, gamma);
+    }
+
+    for (int step = 0; step < 10; ++step) {
+        const std::vector<State> Uold = U;
+        apply_parabolic_cleaning_2d(U, params);
+
+        for (std::size_t id = 0; id < U.size(); ++id) {
+            const double old_me =
+                0.5 * (
+                    Uold[id][BX] * Uold[id][BX]
+                  + Uold[id][BY] * Uold[id][BY]
+                  + Uold[id][BZ] * Uold[id][BZ]
+                );
+            const double new_me =
+                0.5 * (
+                    U[id][BX] * U[id][BX]
+                  + U[id][BY] * U[id][BY]
+                  + U[id][BZ] * U[id][BZ]
+                );
+            U[id][E] = Uold[id][E] + (new_me - old_me);
+        }
+        assert_all_finite(U);
+        assert_positive_raw_pressure(U, gamma);
+    }
+
+    std::cout << "Parabolic pressure assertion passed.\n";
+}
+
+double periodic_delta(double a, double b) {
+    double d = a - b;
+    while (d > 0.5) d -= 1.0;
+    while (d < -0.5) d += 1.0;
+    return d;
+}
+
+double positive_bump_centroid_x(
+    const std::vector<State>& U,
+    int nx,
+    int ny,
+    double dx
+) {
+    double sum_w = 0.0;
+    double sum_x = 0.0;
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            const State& cell = U[idx2d(i, j, nx)];
+            const double w = std::max(cell[BX] - 1.0, 0.0);
+            const double x = (i + 0.5) * dx;
+            sum_w += w;
+            sum_x += w * x;
+        }
+    }
+    return sum_x / sum_w;
+}
+
+void test_powell_advects_bump_with_uniform_velocity() {
+    GLM2DParams params;
+    params.nx = 128;
+    params.ny = 4;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+    params.dt = 0.10 * params.dx;
+
+    const double vx = 1.0;
+    const double t_end = 0.05;
+    const int nstep = static_cast<int>(std::round(t_end / params.dt));
+    params.dt = t_end / static_cast<double>(nstep);
+
+    std::vector<State> U(params.nx * params.ny);
+    for (int j = 0; j < params.ny; ++j) {
+        for (int i = 0; i < params.nx; ++i) {
+            const double x = (i + 0.5) * params.dx;
+            const double r = x - 0.25;
+            const double bump = std::exp(-400.0 * r * r);
+
+            State cell{};
+            cell.fill(0.0);
+            cell[RHO] = 1.0;
+            cell[MX] = vx;
+            cell[MY] = 0.0;
+            cell[MZ] = 0.0;
+            cell[BX] = 1.0 + 0.02 * bump;
+            cell[BY] = 0.0;
+            cell[BZ] = 0.0;
+            cell[E] = 4.0;
+            U[idx2d(i, j, params.nx)] = cell;
+        }
+    }
+
+    const double x0 =
+        positive_bump_centroid_x(U, params.nx, params.ny, params.dx);
+
+    for (int step = 0; step < nstep; ++step) {
+        apply_powell_source_2d(U, params);
+        assert_all_finite(U);
+    }
+
+    const double x1 =
+        positive_bump_centroid_x(U, params.nx, params.ny, params.dx);
+    const double shift = periodic_delta(x1, x0);
+
+    assert(std::abs(shift - vx * t_end) < 2.0 * params.dx);
+    std::cout << "Powell advection assertion passed: shift="
+              << shift << "\n";
 }
 
 void test_mixed_glm_damping_factor() {
@@ -365,7 +592,11 @@ int main() {
     test_powell_source_one_step();
     test_gi_eglm_source_one_step();
     test_projection_reduces_fv_divB();
+    test_projection_preserves_uniform_field();
+    test_projection_moderate_case_keeps_pressure_positive();
     test_parabolic_reduces_fv_divB();
+    test_parabolic_moderate_case_keeps_pressure_positive();
+    test_powell_advects_bump_with_uniform_velocity();
     test_mixed_glm_damping_factor();
 
     GLM2DParams params;
@@ -415,13 +646,21 @@ int main() {
     // ============================================================
 
     for (CleaningType type : cases) {
+        GLM2DParams case_params = params;
+        if (type == CleaningType::POWELL_SOURCE) {
+            // The standalone Powell source is a non-conservative transport
+            // control, not a robust cleaning method. Keep this diagnostic
+            // short so it cannot silently run into nonfinite output.
+            case_params.t_end = 0.05;
+        }
+
         std::cout << "========================================\n";
         std::cout << "Running 2D GLM case: "
                   << cleaning_name(type)
                   << "\n";
         std::cout << "========================================\n";
 
-        run_glm_2d_case(type, params);
+        run_glm_2d_case(type, case_params);
     }
 
     std::cout << "All 2D GLM cleaning cases finished.\n";

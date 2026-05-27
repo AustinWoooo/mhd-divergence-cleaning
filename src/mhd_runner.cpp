@@ -83,7 +83,11 @@ struct BadStateRecord {
 struct CleaningAdvanceStats {
     int subcycles = 0;
     int projection_iterations = 0;
+    double projection_solver_update_residual =
+        std::numeric_limits<double>::quiet_NaN();
     double projection_final_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double projection_true_residual =
         std::numeric_limits<double>::quiet_NaN();
     bool projection_converged = true;
     bool projection_used = false;
@@ -280,6 +284,17 @@ bool has_mhd_run_failure(const MHDRunDiagnostics& diag) {
         || diag.has_negative_pressure;
 }
 
+void write_optional_double(std::ostream& out, double value) {
+    if (std::isfinite(value)) {
+        out << value;
+    }
+}
+
+bool benefits_from_hydro_retry(CleaningType type) {
+    return type == CleaningType::PARABOLIC
+        || type == CleaningType::ELLIPTIC_PROJECTION;
+}
+
 void print_mhd_run_failure_warning(
     const MHDRunParams& params,
     const std::string& cleaning,
@@ -387,7 +402,10 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
         if (projection.iterations > 0 || type == CleaningType::ELLIPTIC_PROJECTION) {
             stats.projection_used = true;
             stats.projection_iterations += projection.iterations;
+            stats.projection_solver_update_residual =
+                projection.solver_update_residual;
             stats.projection_final_residual = projection.final_residual;
+            stats.projection_true_residual = projection.true_residual_Linf;
             stats.projection_converged =
                 stats.projection_converged && projection.converged;
         }
@@ -606,7 +624,9 @@ void write_mhd_diagnostic_row(
     const MHDRunDiagnostics& run_diag,
     int cleaning_subcycles_step,
     int projection_iterations_step,
+    double projection_solver_update_residual,
     double projection_final_residual,
+    double projection_true_residual,
     bool projection_converged
 ) {
     diag << step << "," << time << "," << dt << ","
@@ -624,10 +644,14 @@ void write_mhd_diagnostic_row(
          << (run_diag.has_negative_density ? 1 : 0) << ","
          << (run_diag.has_negative_pressure ? 1 : 0) << ","
          << cleaning_subcycles_step << ","
-         << projection_iterations_step << ","
-         << projection_final_residual << ","
-         << (projection_converged ? 1 : 0)
-         << "\n";
+         << projection_iterations_step << ",";
+    write_optional_double(diag, projection_solver_update_residual);
+    diag << ",";
+    write_optional_double(diag, projection_final_residual);
+    diag << ",";
+    write_optional_double(diag, projection_true_residual);
+    diag << ","
+         << (projection_converged ? 1 : 0) << "\n";
 }
 
 void write_mhd_run_summary(
@@ -640,7 +664,9 @@ void write_mhd_run_summary(
     double energy_initial,
     const MHDRunDiagnostics& final_diag,
     long long cleaning_subcycles_total,
-    long long projection_iterations_total
+    long long projection_iterations_total,
+    CleaningEnergyPolicy energy_policy,
+    double projection_true_residual
 ) {
     const std::string filename =
         "results/mhd_runner/summaries/"
@@ -661,27 +687,38 @@ void write_mhd_run_summary(
         (energy_final - energy_initial)
       / std::max(std::abs(energy_initial), 1.0e-30);
 
-    out << "problem,method,final_time_reached,failure_time,failure_reason,"
+    const std::string status =
+        final_time_reached ? "finished" : "failed";
+
+    out << "problem,method,status,final_time_reached,"
+        << "failure_time,failure_reason,"
         << "final_L1_fv,final_L2_fv,final_Linf_fv,"
         << "energy_initial,energy_final,energy_drift,"
-        << "min_pressure,min_density,"
+        << "min_raw_pressure,min_pressure,min_density,"
+        << "energy_policy,projection_true_residual,"
         << "cleaning_subcycles_total,projection_iterations_total\n";
 
     out << params.problem << ","
-        << method << ","
-        << (final_time_reached ? 1 : 0) << ","
-        << failure_time << ","
-        << failure_reason << ","
-        << final_norms.L1 << ","
-        << final_norms.L2 << ","
-        << final_norms.Linf << ","
-        << energy_initial << ","
-        << energy_final << ","
-        << energy_drift << ","
-        << final_diag.min_pressure << ","
-        << final_diag.min_density << ","
-        << cleaning_subcycles_total << ","
-        << projection_iterations_total << "\n";
+         << method << ","
+         << status << ","
+         << (final_time_reached ? 1 : 0) << ",";
+    write_optional_double(out, failure_time);
+    out << ","
+         << failure_reason << ","
+         << final_norms.L1 << ","
+         << final_norms.L2 << ","
+         << final_norms.Linf << ","
+         << energy_initial << ","
+         << energy_final << ","
+         << energy_drift << ","
+         << final_diag.min_pressure << ","
+         << final_diag.min_pressure << ","
+         << final_diag.min_density << ","
+         << cleaning_energy_policy_name(energy_policy) << ",";
+    write_optional_double(out, projection_true_residual);
+    out << ","
+         << cleaning_subcycles_total << ","
+         << projection_iterations_total << "\n";
 }
 
 } // namespace
@@ -937,7 +974,9 @@ void run_mhd_2d_case(
          << "has_nonfinite,has_negative_density,has_negative_pressure,"
          << "cleaning_subcycles_step,"
          << "projection_iterations_step,"
+         << "projection_solver_update_residual,"
          << "projection_final_residual,"
+         << "projection_true_residual,"
          << "projection_converged\n";
 
     double t    = 0.0;
@@ -951,6 +990,10 @@ void run_mhd_2d_case(
     int last_cleaning_subcycles_step = 0;
     int last_projection_iterations_step = 0;
     double last_projection_final_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double last_projection_solver_update_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double last_projection_true_residual =
         std::numeric_limits<double>::quiet_NaN();
     bool last_projection_converged = true;
 
@@ -969,7 +1012,9 @@ void run_mhd_2d_case(
             run_diag,
             last_cleaning_subcycles_step,
             last_projection_iterations_step,
+            last_projection_solver_update_residual,
             last_projection_final_residual,
+            last_projection_true_residual,
             last_projection_converged
         );
 
@@ -1001,22 +1046,49 @@ void run_mhd_2d_case(
         dt = std::min(dt, t_end - t);
         params.glm.dt = dt;
 
-        // Step 1: HLLD finite-volume update.
-        rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt);
+        // Step 1: HLLD finite-volume update.  Projection/parabolic cleaning
+        // can create sharper magnetic corrections than the uncleaned baseline;
+        // if a trial hydro step violates positivity, retry the same pure-HLLD
+        // update with a smaller dt rather than modifying the Riemann solver.
+        const std::vector<State> U_before_hydro = U;
+        BadStateRecord after_hydro_bad;
+        int hydro_retries = 0;
+        const int max_hydro_retries =
+            benefits_from_hydro_retry(type) ? 8 : 0;
+
+        while (true) {
+            U = U_before_hydro;
+            params.glm.dt = dt;
+            rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt);
+
+            after_hydro_bad =
+                scan_physical_state(
+                    U,
+                    nx,
+                    ny,
+                    dx,
+                    dy,
+                    gamma,
+                    "after_hydro"
+                );
+
+            if (!after_hydro_bad.found || hydro_retries >= max_hydro_retries) {
+                break;
+            }
+
+            dt *= 0.5;
+            ++hydro_retries;
+        }
+
+        if (hydro_retries > 0 && !after_hydro_bad.found) {
+            std::cout << "  [" << name << "] hydro retry accepted"
+                      << "  retries=" << hydro_retries
+                      << "  step=" << step + 1
+                      << "  dt=" << dt << "\n";
+        }
 
         const double next_t = t + dt;
         const int next_step = step + 1;
-
-        const BadStateRecord after_hydro_bad =
-            scan_physical_state(
-                U,
-                nx,
-                ny,
-                dx,
-                dy,
-                gamma,
-                "after_hydro"
-            );
 
         if (after_hydro_bad.found) {
             stopped_for_failure = true;
@@ -1044,6 +1116,8 @@ void run_mhd_2d_case(
                 failed_diag,
                 0,
                 0,
+                std::numeric_limits<double>::quiet_NaN(),
+                std::numeric_limits<double>::quiet_NaN(),
                 std::numeric_limits<double>::quiet_NaN(),
                 true
             );
@@ -1104,6 +1178,8 @@ void run_mhd_2d_case(
                 0,
                 0,
                 std::numeric_limits<double>::quiet_NaN(),
+                std::numeric_limits<double>::quiet_NaN(),
+                std::numeric_limits<double>::quiet_NaN(),
                 true
             );
 
@@ -1148,7 +1224,11 @@ void run_mhd_2d_case(
         projection_iterations_total += cleaning_stats.projection_iterations;
         last_cleaning_subcycles_step = cleaning_stats.subcycles;
         last_projection_iterations_step = cleaning_stats.projection_iterations;
+        last_projection_solver_update_residual =
+            cleaning_stats.projection_solver_update_residual;
         last_projection_final_residual = cleaning_stats.projection_final_residual;
+        last_projection_true_residual =
+            cleaning_stats.projection_true_residual;
         last_projection_converged = cleaning_stats.projection_converged;
 
         t += dt;
@@ -1176,7 +1256,9 @@ void run_mhd_2d_case(
                 failed_diag,
                 cleaning_stats.subcycles,
                 cleaning_stats.projection_iterations,
+                cleaning_stats.projection_solver_update_residual,
                 cleaning_stats.projection_final_residual,
+                cleaning_stats.projection_true_residual,
                 cleaning_stats.projection_converged
             );
 
@@ -1233,7 +1315,9 @@ void run_mhd_2d_case(
         energy_initial,
         final_diag,
         cleaning_subcycles_total,
-        projection_iterations_total
+        projection_iterations_total,
+        params.glm.energy_policy,
+        last_projection_true_residual
     );
 
     std::cout << "  Wrote " << diag_name << "\n";

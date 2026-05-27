@@ -7,7 +7,10 @@
 
 struct ProjectionResult {
     int iterations = 0;
+    double solver_update_residual = 0.0;
     double final_residual = 0.0;
+    double true_residual_L2 = 0.0;
+    double true_residual_Linf = 0.0;
     bool converged = true;
 };
 

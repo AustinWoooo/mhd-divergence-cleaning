@@ -42,21 +42,11 @@ namespace {
 //  so we just copy.
 
 inline PrimState state_to_prim(const State& s, double gamma) {
-    std::vector<double> v(s.begin(), s.end());
-    return PrimState::from_conserved(v, gamma);
+    return PrimState::from_conserved(s, gamma);
 }
 
 inline State prim_to_state(const PrimState& W, double gamma) {
-    std::vector<double> v = W.to_conserved(gamma);
-    State s;
-    for (int k = 0; k < NVAR; ++k) s[k] = v[k];
-    return s;
-}
-
-inline State vec_to_state(const std::vector<double>& v) {
-    State s;
-    for (int k = 0; k < NVAR; ++k) s[k] = v[k];
-    return s;
+    return W.to_conserved(gamma);
 }
 
 struct MHDRunDiagnostics {
@@ -491,8 +481,7 @@ std::vector<State> compute_rhs_hlld_2d(
             const int iL = periodic_index(i - 1, nx);
             const PrimState WL = state_to_prim(U[idx2d(iL, j, nx)], gamma);
             const PrimState WR = state_to_prim(U[idx2d(i,  j, nx)], gamma);
-            const std::vector<double> F = compute_flux(WL, WR, /*direction=*/0, gamma);
-            flux_x[idx2d(i, j, nx)] = vec_to_state(F);
+            flux_x[idx2d(i, j, nx)] = compute_flux(WL, WR, /*direction=*/0, gamma);
         }
     }
 
@@ -502,8 +491,7 @@ std::vector<State> compute_rhs_hlld_2d(
         for (int i = 0; i < nx; ++i) {
             const PrimState WL = state_to_prim(U[idx2d(i, jL, nx)], gamma);
             const PrimState WR = state_to_prim(U[idx2d(i, j,  nx)], gamma);
-            const std::vector<double> F = compute_flux(WL, WR, /*direction=*/1, gamma);
-            flux_y[idx2d(i, j, nx)] = vec_to_state(F);
+            flux_y[idx2d(i, j, nx)] = compute_flux(WL, WR, /*direction=*/1, gamma);
         }
     }
 

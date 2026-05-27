@@ -13,8 +13,8 @@ namespace MHD {
 //  PrimState member functions
 // -----------------------------------------------------------------------------
 
-std::vector<double> PrimState::to_conserved(double gamma) const {
-    std::vector<double> U(NVAR);
+State PrimState::to_conserved(double gamma) const {
+    State U{};
     U[IDN] = rho;
     U[IM1] = rho * u;
     U[IM2] = rho * v;
@@ -29,7 +29,7 @@ std::vector<double> PrimState::to_conserved(double gamma) const {
     return U;
 }
 
-PrimState PrimState::from_conserved(const std::vector<double>& U, double gamma) {
+PrimState PrimState::from_conserved(const State& U, double gamma) {
     PrimState W;
     W.rho = U[IDN];
     double inv_rho = 1.0 / std::max(W.rho, TINY_NUMBER);
@@ -61,11 +61,11 @@ PrimState rotate_to_normal(const PrimState& W, int direction) {
     }
 }
 
-std::vector<double> rotate_flux_back(const std::vector<double>& F, int direction) {
+State rotate_flux_back(const State& F, int direction) {
     if (direction == 0) {
         return F;
     } else {
-        std::vector<double> Fb(NVAR);
+        State Fb{};
         Fb[IDN] = F[IDN];
         Fb[IEN] = F[IEN];
         Fb[IM1] = F[IM3];
@@ -93,8 +93,8 @@ double fast_magnetosonic_speed(const PrimState& W, double gamma) {
     return std::sqrt(std::max(0.5 * (term + std::sqrt(disc)), 0.0));
 }
 
-std::vector<double> physical_flux(const PrimState& W, double gamma) {
-    std::vector<double> F(NVAR);
+State physical_flux(const PrimState& W, double gamma) {
+    State F{};
     double pmag = 0.5 * (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz);
     double ptot = W.p + pmag;
     double vdotB = W.u*W.Bx + W.v*W.By + W.w*W.Bz;
@@ -116,7 +116,7 @@ std::vector<double> physical_flux(const PrimState& W, double gamma) {
 //  HLLD Riemann solver (normal frame)
 // -----------------------------------------------------------------------------
 
-std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
+State hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
     // Enforce a unique normal B at the interface.
     double Bn = 0.5 * (WL.Bx + WR.Bx);
     PrimState L = WL; L.Bx = Bn;
@@ -130,10 +130,10 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
     double SR = std::max(L.u + cfL, R.u + cfR);
 
     // Step 2: conserved variables and physical fluxes
-    std::vector<double> UL = L.to_conserved(gamma);
-    std::vector<double> UR = R.to_conserved(gamma);
-    std::vector<double> FL = physical_flux(L, gamma);
-    std::vector<double> FR = physical_flux(R, gamma);
+    State UL = L.to_conserved(gamma);
+    State UR = R.to_conserved(gamma);
+    State FL = physical_flux(L, gamma);
+    State FR = physical_flux(R, gamma);
 
     if (SL >= 0.0) return FL;
     if (SR <= 0.0) return FR;
@@ -196,7 +196,7 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
 
     auto make_U_star = [&](double rho_s, double v_s, double w_s,
                            double By_s, double Bz_s, double E_s) {
-        std::vector<double> Us(NVAR);
+        State Us{};
         Us[IDN] = rho_s;
         Us[IM1] = rho_s * SM;
         Us[IM2] = rho_s * v_s;
@@ -205,10 +205,11 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
         Us[IB1] = Bn;
         Us[IB2] = By_s;
         Us[IB3] = Bz_s;
+        Us[IPSI] = 0.0;
         return Us;
     };
-    std::vector<double> UL_s = make_U_star(rhoL_star, vL_s, wL_s, ByL_s, BzL_s, EL_s);
-    std::vector<double> UR_s = make_U_star(rhoR_star, vR_s, wR_s, ByR_s, BzR_s, ER_s);
+    State UL_s = make_U_star(rhoL_star, vL_s, wL_s, ByL_s, BzL_s, EL_s);
+    State UR_s = make_U_star(rhoR_star, vR_s, wR_s, ByR_s, BzR_s, ER_s);
 
     // Step 8: flux selection
     bool degenerate = (Bn2 < TINY_NUMBER);
@@ -232,7 +233,7 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
         double ER_ss = ER_s + sqrtRhoRs * (vBRs - vB_ss) * sgn_Bn;
 
         auto make_U_ss = [&](double rho_ss, double E_ss) {
-            std::vector<double> Uss(NVAR);
+            State Uss{};
             Uss[IDN] = rho_ss;
             Uss[IM1] = rho_ss * SM;
             Uss[IM2] = rho_ss * v_ss;
@@ -241,12 +242,13 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
             Uss[IB1] = Bn;
             Uss[IB2] = By_ss;
             Uss[IB3] = Bz_ss;
+            Uss[IPSI] = 0.0;
             return Uss;
         };
-        std::vector<double> UL_ss = make_U_ss(rhoL_star, EL_ss);
-        std::vector<double> UR_ss = make_U_ss(rhoR_star, ER_ss);
+        State UL_ss = make_U_ss(rhoL_star, EL_ss);
+        State UR_ss = make_U_ss(rhoR_star, ER_ss);
 
-        std::vector<double> F(NVAR);
+        State F{};
         if (SLs >= 0.0) {
             for (int i = 0; i < NVAR; ++i)
                 F[i] = FL[i] + SL * (UL_s[i] - UL[i]);
@@ -263,7 +265,7 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
         F[IPSI] = 0.0;
         return F;
     } else {
-        std::vector<double> F(NVAR);
+        State F{};
         if (SM >= 0.0) {
             for (int i = 0; i < NVAR; ++i)
                 F[i] = FL[i] + SL * (UL_s[i] - UL[i]);
@@ -280,14 +282,14 @@ std::vector<double> hlld_flux_normal(const PrimState& WL, const PrimState& WR, d
 //  Public interface
 // -----------------------------------------------------------------------------
 
-std::vector<double> compute_flux(const PrimState& W_L, const PrimState& W_R,
-                                 int direction, double gamma) {
+State compute_flux(const PrimState& W_L, const PrimState& W_R,
+                   int direction, double gamma) {
     if (direction != 0 && direction != 1) {
         throw std::invalid_argument("direction must be 0 (X) or 1 (Y)");
     }
     PrimState L_rot = rotate_to_normal(W_L, direction);
     PrimState R_rot = rotate_to_normal(W_R, direction);
-    std::vector<double> F_rot = hlld_flux_normal(L_rot, R_rot, gamma);
+    State F_rot = hlld_flux_normal(L_rot, R_rot, gamma);
     return rotate_flux_back(F_rot, direction);
 }
 

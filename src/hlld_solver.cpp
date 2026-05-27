@@ -58,18 +58,24 @@ PrimState PrimState::from_conserved(const State& U, double gamma) {
 PrimState rotate_to_normal(const PrimState& W, int direction) {
     if (direction == 0) {
         return W;
-    } else {
+    } else if (direction == 1) {
+        // Cyclic permutation (x,y,z) -> (y,z,x): make Y the normal axis.
         PrimState Wr = W;
         Wr.u  = W.v;   Wr.v  = W.w;   Wr.w  = W.u;
         Wr.Bx = W.By;  Wr.By = W.Bz;  Wr.Bz = W.Bx;
         return Wr;
     }
+    // A third direction (Z-flux) would require a *different* permutation
+    // (x,y,z) -> (z,x,y); refuse rather than silently apply the Y rotation.
+    throw std::invalid_argument(
+        "rotate_to_normal: direction must be 0 (X) or 1 (Y)");
 }
 
 State rotate_flux_back(const State& F, int direction) {
     if (direction == 0) {
         return F;
-    } else {
+    } else if (direction == 1) {
+        // Inverse of the (x,y,z) -> (y,z,x) permutation applied above.
         State Fb{};
         Fb[IDN] = F[IDN];
         Fb[IEN] = F[IEN];
@@ -82,6 +88,8 @@ State rotate_flux_back(const State& F, int direction) {
         Fb[IPSI] = F[IPSI];
         return Fb;
     }
+    throw std::invalid_argument(
+        "rotate_flux_back: direction must be 0 (X) or 1 (Y)");
 }
 
 // -----------------------------------------------------------------------------
@@ -297,9 +305,7 @@ State hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
 
 State compute_flux(const PrimState& W_L, const PrimState& W_R,
                    int direction, double gamma) {
-    if (direction != 0 && direction != 1) {
-        throw std::invalid_argument("direction must be 0 (X) or 1 (Y)");
-    }
+    // rotate_to_normal / rotate_flux_back validate `direction` and throw.
     PrimState L_rot = rotate_to_normal(W_L, direction);
     PrimState R_rot = rotate_to_normal(W_R, direction);
     State F_rot = hlld_flux_normal(L_rot, R_rot, gamma);

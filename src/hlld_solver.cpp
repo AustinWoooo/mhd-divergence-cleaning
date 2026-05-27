@@ -130,6 +130,12 @@ State physical_flux(const PrimState& W, double gamma) {
 // -----------------------------------------------------------------------------
 
 State hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
+    // Relative tolerance used by every near-degeneracy check below. An
+    // absolute threshold scaled by TINY_NUMBER (1e-20) would essentially
+    // never fire in physical units; comparing |x| <= REL_TOL * scale catches
+    // genuine cancellations without being unit-dependent.
+    constexpr double REL_TOL = 1.0e-12;
+
     // Enforce a unique normal B at the interface.
     double Bn = 0.5 * (WL.Bx + WR.Bx);
     PrimState L = WL; L.Bx = Bn;
@@ -173,12 +179,19 @@ State hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
     double SLs = SM - std::abs(Bn) / sqrtRhoLs;
     double SRs = SM + std::abs(Bn) / sqrtRhoRs;
 
-    // Step 6: star-state tangential velocity and magnetic field
+    // Step 6: star-state tangential velocity and magnetic field.
+    // denom = rho*(S-u)*(S-SM) - Bn^2 vanishes at the Alfven resonance;
+    // when it does, the jumps across the Alfven wave collapse and (v_t, B_t)
+    // should fall back to the upstream values.
     auto compute_star_tangential = [&](const PrimState& W, double S, double sMu,
                                        double& vs, double& ws,
                                        double& Bys, double& Bzs) {
-        double denom = W.rho * sMu * (S - SM) - Bn2;
-        if (std::abs(denom) < TINY_NUMBER * W.rho * sMu * sMu) {
+        double term_fluid = W.rho * sMu * (S - SM);
+        double denom = term_fluid - Bn2;
+        // Relative threshold against the magnitudes of the two component
+        // terms, so the test is invariant to the choice of units.
+        double scale = std::abs(term_fluid) + Bn2;
+        if (std::abs(denom) <= REL_TOL * scale) {
             vs = W.v;  ws = W.w;
             Bys = W.By; Bzs = W.Bz;
         } else {
@@ -225,15 +238,13 @@ State hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
     State UR_s = make_U_star(rhoR_star, vR_s, wR_s, ByR_s, BzR_s, ER_s);
 
     // Step 8: flux selection.
-    // Use a relative threshold: Bn is degenerate when its energy density is
-    // negligible compared to the total magnetic energy at the interface.
-    // An absolute threshold (e.g. Bn2 < 1e-20) would essentially never trigger
-    // in CGS / astrophysical units and let near-degenerate states feed
-    // unstable ** state formulas.
-    constexpr double DEGENERATE_REL_TOL = 1.0e-12;
+    // Bn is degenerate when its energy density is negligible compared to the
+    // total magnetic energy at the interface; in that case the ** state
+    // formulas (which divide by sqrt(rho*)·sgn(Bn) combinations) lose
+    // significance, so we collapse to the * state.
     double Btot2 = std::max(L.Bx*L.Bx + L.By*L.By + L.Bz*L.Bz,
                             R.Bx*R.Bx + R.By*R.By + R.Bz*R.Bz);
-    bool degenerate = (Bn2 <= DEGENERATE_REL_TOL * Btot2);
+    bool degenerate = (Bn2 <= REL_TOL * Btot2);
 
     if (!degenerate) {
         double sgn_Bn = (Bn >= 0.0) ? 1.0 : -1.0;

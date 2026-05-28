@@ -669,6 +669,10 @@ double max_signal_speed_2d(
 //  llf_face_x[face] / llf_face_y[face] select the diffusive LLF flux on that
 //  face. A face flux is shared by both adjacent cells, so swapping HLLD <-> LLF
 //  on a face keeps the conservative update exactly conservative.
+//
+//  When mass_flux_x_out / mass_flux_y_out are non-null they receive the per-face
+//  mass flux F[RHO] actually used (HLLD or LLF). The dual-energy entropy is
+//  advected with these same mass fluxes so it stays consistent with density.
 
 std::vector<State> compute_rhs_blended_2d(
     const std::vector<State>& U,
@@ -676,7 +680,9 @@ std::vector<State> compute_rhs_blended_2d(
     const std::vector<char>& llf_face_y,
     int nx, int ny,
     double dx, double dy,
-    double gamma
+    double gamma,
+    std::vector<double>* mass_flux_x_out = nullptr,
+    std::vector<double>* mass_flux_y_out = nullptr
 ) {
     const int ncell = nx * ny;
 
@@ -693,6 +699,9 @@ std::vector<State> compute_rhs_blended_2d(
             flux_x[face] = llf_face_x[face]
                 ? compute_llf_flux(WL, WR, /*direction=*/0, gamma)
                 : compute_flux(WL, WR, /*direction=*/0, gamma);
+            if (mass_flux_x_out) {
+                (*mass_flux_x_out)[face] = flux_x[face][RHO];
+            }
         }
     }
 
@@ -706,6 +715,9 @@ std::vector<State> compute_rhs_blended_2d(
             flux_y[face] = llf_face_y[face]
                 ? compute_llf_flux(WL, WR, /*direction=*/1, gamma)
                 : compute_flux(WL, WR, /*direction=*/1, gamma);
+            if (mass_flux_y_out) {
+                (*mass_flux_y_out)[face] = flux_y[face][RHO];
+            }
         }
     }
 
@@ -731,6 +743,155 @@ std::vector<State> compute_rhs_blended_2d(
         }
     }
     return RHS;
+}
+
+// -----------------------------------------------------------------------------
+//  Dual-energy formalism (Option C).
+//
+//  In the low-beta / cold core of Orszag-Tang the thermal pressure is a tiny
+//  difference of large numbers, p = (gamma-1)(E - ke - me), so the conservative
+//  total-energy update loses all significance there and can drive p < 0 even
+//  with the LLF positivity fallback. We therefore carry a second thermodynamic
+//  variable -- the conserved entropy density
+//
+//      Sc = p * rho^(1-gamma)        (so p = Sc * rho^(gamma-1))
+//
+//  which is simply advected by the flow in smooth regions (no source term) and
+//  stays positive under upwind advection. After the hydro step, cells where the
+//  total-energy internal energy is a negligible fraction of the total energy
+//  recover p from the advected entropy instead, and rewrite E to match. Shocks
+//  (large internal-energy fraction) keep using the total energy, which captures
+//  the correct entropy jump. Reference: Bryan et al. 1995 (ENZO dual energy).
+// -----------------------------------------------------------------------------
+
+// Switch threshold: trust the total energy when e_int / E_total exceeds this,
+// otherwise fall back to the advected entropy. Bryan et al. use ~1e-3.
+constexpr double DUAL_ENERGY_ETA = 1.0e-3;
+
+inline double conserved_entropy(double rho, double p, double gamma) {
+    return p * std::pow(rho, 1.0 - gamma);
+}
+
+inline double pressure_from_entropy(double Sc, double rho, double gamma) {
+    return Sc * std::pow(rho, gamma - 1.0);
+}
+
+// Build the entropy field from the (positive) start-of-step state. Because the
+// previous step's recovery left every cell with a correct positive pressure,
+// reconstructing Sc here is equivalent to having persisted and advected it.
+std::vector<double> conserved_entropy_field(
+    const std::vector<State>& U,
+    double gamma
+) {
+    const int ncell = static_cast<int>(U.size());
+    std::vector<double> Sc(ncell, 0.0);
+    for (int id = 0; id < ncell; ++id) {
+        const double rho = U[id][RHO];
+        if (!(rho > 0.0) || !std::isfinite(rho)) {
+            continue;
+        }
+        const double ke =
+            0.5 * (U[id][MX]*U[id][MX] + U[id][MY]*U[id][MY]
+                 + U[id][MZ]*U[id][MZ]) / rho;
+        const double me =
+            0.5 * (U[id][BX]*U[id][BX] + U[id][BY]*U[id][BY]
+                 + U[id][BZ]*U[id][BZ]);
+        const double p = (gamma - 1.0) * (U[id][E] - ke - me);
+        Sc[id] = conserved_entropy(rho, std::max(p, 0.0), gamma);
+    }
+    return Sc;
+}
+
+// Entropy-density RHS = -div(F_S) with the consistent upwind passive-scalar
+// flux  F_S(face) = mass_flux(face) * K_upwind,  K = Sc/rho. Using the same mass
+// flux that advanced the density gives Sc a discrete maximum principle, so Sc
+// stays positive whenever rho does.
+std::vector<double> entropy_rhs_from_mass_flux(
+    const std::vector<State>& U,
+    const std::vector<double>& Sc,
+    const std::vector<double>& mass_flux_x,
+    const std::vector<double>& mass_flux_y,
+    int nx, int ny,
+    double dx, double dy
+) {
+    const int ncell = nx * ny;
+
+    auto K_of = [&](int id) {
+        const double rho = U[id][RHO];
+        return (rho > 0.0 && std::isfinite(rho)) ? Sc[id] / rho : 0.0;
+    };
+
+    std::vector<double> fS_x(ncell, 0.0);
+    std::vector<double> fS_y(ncell, 0.0);
+
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            const int iL = periodic_index(i - 1, nx);
+            const int face = idx2d(i, j, nx);
+            const double fm = mass_flux_x[face];
+            const double K_up = (fm >= 0.0) ? K_of(idx2d(iL, j, nx))
+                                            : K_of(idx2d(i, j, nx));
+            fS_x[face] = fm * K_up;
+        }
+    }
+    for (int j = 0; j < ny; ++j) {
+        const int jL = periodic_index(j - 1, ny);
+        for (int i = 0; i < nx; ++i) {
+            const int face = idx2d(i, j, nx);
+            const double fm = mass_flux_y[face];
+            const double K_up = (fm >= 0.0) ? K_of(idx2d(i, jL, nx))
+                                            : K_of(idx2d(i, j, nx));
+            fS_y[face] = fm * K_up;
+        }
+    }
+
+    std::vector<double> rhs(ncell, 0.0);
+    for (int j = 0; j < ny; ++j) {
+        const int jp = periodic_index(j + 1, ny);
+        for (int i = 0; i < nx; ++i) {
+            const int ip = periodic_index(i + 1, nx);
+            const int id = idx2d(i, j, nx);
+            rhs[id] = -(fS_x[idx2d(ip, j, nx)] - fS_x[id]) / dx
+                      -(fS_y[idx2d(i, jp, nx)] - fS_y[id]) / dy;
+        }
+    }
+    return rhs;
+}
+
+// Dual-energy recovery: in cells where the total-energy internal energy is a
+// negligible fraction of the total energy, recover p from the advected entropy
+// and rewrite E so the conserved state is consistent and pressure-positive.
+// Elsewhere the total energy is left untouched (it is the conserved primary).
+void apply_dual_energy_recovery(
+    std::vector<State>& U,
+    const std::vector<double>& Sc,
+    double gamma
+) {
+    const int ncell = static_cast<int>(U.size());
+    for (int id = 0; id < ncell; ++id) {
+        const double rho = U[id][RHO];
+        if (!(rho > 0.0) || !std::isfinite(rho)) {
+            continue;  // density failures are handled by the runner's scan
+        }
+        const double ke =
+            0.5 * (U[id][MX]*U[id][MX] + U[id][MY]*U[id][MY]
+                 + U[id][MZ]*U[id][MZ]) / rho;
+        const double me =
+            0.5 * (U[id][BX]*U[id][BX] + U[id][BY]*U[id][BY]
+                 + U[id][BZ]*U[id][BZ]);
+        const double e_int = U[id][E] - ke - me;
+
+        // Trust the total energy in shocks / thermally-dominated cells.
+        if (std::isfinite(e_int) && e_int > DUAL_ENERGY_ETA * U[id][E]) {
+            continue;
+        }
+
+        // Low-beta / cold cell: recover pressure from the advected entropy.
+        const double p = pressure_from_entropy(Sc[id], rho, gamma);
+        if (std::isfinite(p) && p > 0.0) {
+            U[id][E] = p / (gamma - 1.0) + ke + me;
+        }
+    }
 }
 
 // Raw positivity test on a conserved cell: finite, positive density, and
@@ -770,7 +931,9 @@ std::vector<State> positivity_limited_stage(
     double dt,
     int nx, int ny,
     double dx, double dy,
-    double gamma
+    double gamma,
+    std::vector<double>* mass_flux_x_out = nullptr,
+    std::vector<double>* mass_flux_y_out = nullptr
 ) {
     const int ncell = nx * ny;
     constexpr int MAX_SWEEPS = 8;
@@ -782,7 +945,8 @@ std::vector<State> positivity_limited_stage(
     for (int sweep = 0; ; ++sweep) {
         const std::vector<State> RHS =
             compute_rhs_blended_2d(
-                flux_state, llf_x, llf_y, nx, ny, dx, dy, gamma);
+                flux_state, llf_x, llf_y, nx, ny, dx, dy, gamma,
+                mass_flux_x_out, mass_flux_y_out);
 
         for (int id = 0; id < ncell; ++id) {
             for (int k = 0; k < NVAR; ++k) {
@@ -839,10 +1003,24 @@ void rk2_step_hlld_2d(
 ) {
     const int ncell = nx * ny;
 
-    // Predictor: Us = U + dt * RHS(U), positivity-limited (Option A).
+    // Dual-energy (Option C): reconstruct the entropy from the positive
+    // start-of-step state, then advect it alongside the conserved update.
+    const std::vector<double> Sc = conserved_entropy_field(U, gamma);
+
+    // Predictor: Us = U + dt * RHS(U), positivity-limited (Option A). Capture the
+    // per-face mass fluxes so the entropy advects consistently with density.
+    std::vector<double> mfx(ncell, 0.0), mfy(ncell, 0.0);
     std::vector<State> Us =
         positivity_limited_stage(U, U, /*coeff=*/1.0, dt,
-                                 nx, ny, dx, dy, gamma);
+                                 nx, ny, dx, dy, gamma, &mfx, &mfy);
+
+    const std::vector<double> S_rhs1 =
+        entropy_rhs_from_mass_flux(U, Sc, mfx, mfy, nx, ny, dx, dy);
+    std::vector<double> Sc_s(ncell);
+    for (int id = 0; id < ncell; ++id) {
+        Sc_s[id] = Sc[id] + dt * S_rhs1[id];
+    }
+    apply_dual_energy_recovery(Us, Sc_s, gamma);
 
     // Task C: optional projection on the intermediate predictor state.
     if (stage_glm_params != nullptr) {
@@ -884,8 +1062,19 @@ void rk2_step_hlld_2d(
             base[id][k] = 0.5 * (U[id][k] + Us[id][k]);
         }
     }
+    std::vector<double> mfx2(ncell, 0.0), mfy2(ncell, 0.0);
     U = positivity_limited_stage(base, Us, /*coeff=*/0.5, dt,
-                                 nx, ny, dx, dy, gamma);
+                                 nx, ny, dx, dy, gamma, &mfx2, &mfy2);
+
+    // Dual-energy corrector: SSP-RK2 combination of the entropy, advected with
+    // the corrector mass fluxes, then recover pressure in low-beta cells.
+    const std::vector<double> S_rhs2 =
+        entropy_rhs_from_mass_flux(Us, Sc_s, mfx2, mfy2, nx, ny, dx, dy);
+    std::vector<double> Sc_new(ncell);
+    for (int id = 0; id < ncell; ++id) {
+        Sc_new[id] = 0.5 * (Sc[id] + Sc_s[id] + dt * S_rhs2[id]);
+    }
+    apply_dual_energy_recovery(U, Sc_new, gamma);
 }
 
 // Overload without stage projection (backward-compatible default).

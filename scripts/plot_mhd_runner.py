@@ -14,15 +14,6 @@ Four figures are saved:
       Orszag-Tang: 2D final-state maps (density, pressure, |divB|)
       for NONE vs the best finite-speed cleaning method.
 
-  figures/mhd_runner/mhd_runner_bw_divB.png
-      Brio-Wu strip: L2(divB_fv) vs time for all cleaning methods.
-      (Initial divB = 0 in this problem; the plot shows how much
-       each method accumulates during the run.)
-
-  figures/mhd_runner/mhd_runner_bw_profiles.png
-      Brio-Wu strip: 1D final-state profiles along the middle row
-      (rho, p, u, By) for NONE vs MIXED_GLM.
-
   figures/mhd_runner/mhd_runner_fl_divB.png
   figures/mhd_runner/mhd_runner_fl_snapshot.png
       Field-loop advection diagnostics and final maps.
@@ -57,18 +48,10 @@ import matplotlib.colors as mcolors
 # ---------------------------------------------------------------------------
 
 OT_PREFIX = "mhd_ot"
-BW_PREFIX = "mhd_bw"
 FL_PREFIX = "mhd_fl"
 DA_PREFIX = "mhd_da"
 
 PROBLEMS = {
-    "brio_wu": {
-        "prefix": BW_PREFIX,
-        "kind": "profile",
-        "title": "Brio-Wu Shock Tube",
-        "t_end": 0.2,
-        "gamma": "2",
-    },
     "orszag_tang": {
         "prefix": OT_PREFIX,
         "kind": "map",
@@ -502,61 +485,6 @@ def plot_history_all_map_problems(
     plt.close()
 
 
-def plot_profile_all_methods(problem_key: str, output_name: str):
-    spec = PROBLEMS[problem_key]
-    prefix = spec["prefix"]
-    profile_vars = [
-        ("rho", r"Density $\rho$"),
-        ("p", r"Pressure $P$"),
-        ("u", r"Velocity $u_x$"),
-        ("By", r"Transverse field $B_y$"),
-    ]
-
-    rows = {}
-    for method in selected_methods():
-        df = load_snapshot(prefix, method, warn=True)
-        if df is None:
-            continue
-        ny = int(df["j"].max() + 1)
-        j_mid = ny // 2
-        rows[method] = df[df["j"] == j_mid].sort_values("i")
-
-    if not rows:
-        print(f"  warning: no profile snapshots found for {problem_key}")
-        return
-
-    fig, axes = plt.subplots(2, 2, figsize=(10.5, 7.2), sharex=True)
-    fig.suptitle(problem_label(problem_key), fontsize=12)
-    ax_flat = axes.ravel()
-
-    for ax, (col, ylabel) in zip(ax_flat, profile_vars):
-        for method, row in rows.items():
-            if col not in row.columns:
-                print(f"  warning: {prefix}_{method}_final.csv missing {col}")
-                continue
-            style = method_style(method)
-            ax.plot(
-                row["x"].values,
-                row[col].values,
-                color=style["color"],
-                ls=style["ls"],
-                lw=1.7,
-                label=style["label"],
-            )
-        ax.set_ylabel(ylabel)
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=8)
-
-    for ax in axes[1]:
-        ax.set_xlabel(r"$x$")
-
-    plt.tight_layout()
-    out = FIGURES_DIR / output_name
-    plt.savefig(out, dpi=220, bbox_inches="tight")
-    print(f"  Saved → {out}")
-    plt.close()
-
-
 def plot_single_method_snapshot(
     problem_key: str,
     method: str,
@@ -792,117 +720,6 @@ def plot_ot_snapshot():
 
 
 # ---------------------------------------------------------------------------
-#  Figure 3  — Brio-Wu: divB evolution
-# ---------------------------------------------------------------------------
-
-def plot_bw_divB():
-    fig, ax = plt.subplots(figsize=(8, 5))
-
-    plotted = 0
-    for ct in CLEANING_TYPES:
-        df = load_diag(BW_PREFIX, ct)
-        if df is None:
-            continue
-        # Brio-Wu strip is 1D-in-2D: initial divB ≈ 0 and stays tiny.
-        # Use symlog so we can see structure even when values hit 0.
-        ax.plot(
-            df["time"],
-            df["L2_fv"],
-            color=COLORS[ct],
-            ls=LINESTYLES[ct],
-            lw=1.8,
-            label=LABELS[ct],
-        )
-        plotted += 1
-
-    if plotted == 0:
-        print("  [bw_divB] no data found — run test_mhd_runner first.")
-        plt.close()
-        return
-
-    ax.set_yscale("symlog", linthresh=1e-14)
-    ax.set_xlabel("time", fontsize=12)
-    ax.set_ylabel(r"$L_2\!\left(\nabla\!\cdot\!\mathbf{B}\right)$ (FV)", fontsize=12)
-    ax.set_title(
-        r"Brio-Wu Shock Tube (2D strip)  —  HLLD + GLM cleaning comparison"
-        "\n"
-        r"$N=128\times128$,  $\gamma=2$,  $t_{\rm end}=0.2$",
-        fontsize=11,
-    )
-    ax.legend(fontsize=8.5, ncol=2)
-    ax.grid(True, which="both", alpha=0.3)
-    plt.tight_layout()
-
-    out = FIGURES_DIR / "mhd_runner_bw_divB.png"
-    plt.savefig(out, dpi=200, bbox_inches="tight")
-    print(f"  Saved → {out}")
-    plt.close()
-
-
-# ---------------------------------------------------------------------------
-#  Figure 4  — Brio-Wu: 1D shock profiles
-# ---------------------------------------------------------------------------
-
-def plot_bw_profiles():
-    # Compare NONE vs MIXED_GLM along the middle row of the 2D strip.
-    comparisons = [
-        ("none",      "None (HLLD only)", "tab:blue", "-"),
-        ("mixed_glm", "Mixed GLM",        "tab:red",  "--"),
-    ]
-
-    dfs = {}
-    for ct, _, _, _ in comparisons:
-        df = load_snapshot(BW_PREFIX, ct)
-        if df is None:
-            print(f"  [bw_profiles] missing {BW_PREFIX}_{ct}_final.csv — skipping.")
-            return
-        dfs[ct] = df
-
-    # Extract middle y-row.
-    def middle_row(df):
-        ny = df["j"].max() + 1
-        j_mid = ny // 2
-        return df[df["j"] == j_mid].sort_values("i")
-
-    rows = {ct: middle_row(dfs[ct]) for ct, *_ in comparisons}
-
-    plot_vars = [
-        ("rho", r"Density $\rho$"),
-        ("p",   r"Pressure $P$"),
-        ("u",   r"Velocity $u_x$"),
-        ("By",  r"Transverse field $B_y$"),
-    ]
-
-    fig, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True)
-    fig.suptitle(
-        r"Brio-Wu Shock Tube (2D strip, middle row)  —  final state at $t=0.2$"
-        "\n"
-        r"HLLD solver,  $N=128\times128$,  $\gamma=2$",
-        fontsize=12,
-    )
-
-    ax_flat = axes.ravel()
-    for k, (col, ylabel) in enumerate(plot_vars):
-        ax = ax_flat[k]
-        for ct, label, color, ls in comparisons:
-            r = rows[ct]
-            ax.plot(r["x"].values, r[col].values,
-                    color=color, ls=ls, lw=1.6, label=label)
-        ax.set_ylabel(ylabel, fontsize=11)
-        ax.legend(fontsize=9)
-        ax.grid(True, alpha=0.3)
-
-    for ax in axes[1]:
-        ax.set_xlabel(r"$x$", fontsize=11)
-
-    plt.tight_layout()
-    out = FIGURES_DIR / "mhd_runner_bw_profiles.png"
-    plt.savefig(out, dpi=200, bbox_inches="tight")
-    print(f"  Saved → {out}")
-    plt.close()
-
-
-# ---------------------------------------------------------------------------
 #  Entry point
 # ---------------------------------------------------------------------------
 
@@ -915,14 +732,6 @@ def main():
     plot_divB_all_methods(
         "orszag_tang",
         "mhd_runner_ot_divB_all_methods.png",
-    )
-
-    print("\n=== Brio-Wu shock tube ===")
-    plot_bw_divB()
-    plot_bw_profiles()
-    plot_profile_all_methods(
-        "brio_wu",
-        "mhd_runner_bw_profiles_all_methods.png",
     )
 
     print("\n=== Field-loop advection ===")

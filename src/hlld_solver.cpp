@@ -384,6 +384,40 @@ State hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
 }
 
 // -----------------------------------------------------------------------------
+//  Local Lax-Friedrichs (Rusanov) flux (normal frame)
+//
+//  Diffusive single-speed flux used as a positivity-preserving fallback when the
+//  HLLD update would drive density or pressure non-positive. Matches the HLLD
+//  convention here: the normal field and psi are passive in the hydro flux
+//  (F[IB1] = F[IPSI] = 0), so swapping HLLD <-> LLF on a face does not alter the
+//  divergence treatment, only the amount of dissipation.
+// -----------------------------------------------------------------------------
+
+State llf_flux_normal(const PrimState& WL, const PrimState& WR, double gamma) {
+    // Enforce a unique normal B at the interface (as in HLLD).
+    const double Bn = 0.5 * (WL.Bx + WR.Bx);
+    PrimState L = WL; L.Bx = Bn;
+    PrimState R = WR; R.Bx = Bn;
+
+    const double cfL = fast_magnetosonic_speed(L, gamma);
+    const double cfR = fast_magnetosonic_speed(R, gamma);
+    const double smax = std::max(std::abs(L.u) + cfL, std::abs(R.u) + cfR);
+
+    const State UL = L.to_conserved(gamma);
+    const State UR = R.to_conserved(gamma);
+    const State FL = physical_flux(L, gamma);
+    const State FR = physical_flux(R, gamma);
+
+    State F{};
+    for (int i = 0; i < NVAR; ++i) {
+        F[i] = 0.5 * (FL[i] + FR[i]) - 0.5 * smax * (UR[i] - UL[i]);
+    }
+    F[IB1]  = 0.0;
+    F[IPSI] = 0.0;
+    return F;
+}
+
+// -----------------------------------------------------------------------------
 //  Public interface
 // -----------------------------------------------------------------------------
 
@@ -393,6 +427,14 @@ State compute_flux(const PrimState& W_L, const PrimState& W_R,
     PrimState L_rot = rotate_to_normal(W_L, direction);
     PrimState R_rot = rotate_to_normal(W_R, direction);
     State F_rot = hlld_flux_normal(L_rot, R_rot, gamma);
+    return rotate_flux_back(F_rot, direction);
+}
+
+State compute_llf_flux(const PrimState& W_L, const PrimState& W_R,
+                       int direction, double gamma) {
+    PrimState L_rot = rotate_to_normal(W_L, direction);
+    PrimState R_rot = rotate_to_normal(W_R, direction);
+    State F_rot = llf_flux_normal(L_rot, R_rot, gamma);
     return rotate_flux_back(F_rot, direction);
 }
 

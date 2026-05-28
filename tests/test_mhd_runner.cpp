@@ -3,9 +3,8 @@
 //
 //  Drives the integrated HLLD + GLM runner on several MHD problems:
 //    1. Orszag-Tang vortex   (smooth, periodic, full 2D)
-//    2. Brio-Wu shock tube   (1D-in-y replicated 2D strip)
-//    3. Field-loop advection (weak localized magnetic loop)
-//    4. Divergence advection (controlled non-solenoidal perturbation)
+//    2. Field-loop advection (weak localized magnetic loop)
+//    3. Divergence advection (controlled non-solenoidal perturbation)
 //
 //  Each problem is run with several cleaning methods so divB behaviour can be
 //  compared in results/divergence/*.csv and results/snapshots/*_final.csv.
@@ -58,8 +57,8 @@ void print_usage(const char* prog) {
         << "             (Task C) apply elliptic projection after each RK predictor\n"
         << "             stage in addition to the end-of-step projection.\n"
         << "             Only affects elliptic_projection runs.\n"
-        << "  problem   : orszag_tang | brio_wu | field_loop\n"
-        << "              divergence_advection  (default: orszag_tang + brio_wu)\n"
+        << "  problem   : orszag_tang | field_loop\n"
+        << "              divergence_advection  (default: orszag_tang)\n"
         << "  cleaning  : none | parabolic | hyperbolic_glm | mixed_glm\n"
         << "              elliptic_projection | powell_source\n"
         << "              mixed_eglm | gi_mixed_eglm  (default: all)\n"
@@ -70,9 +69,6 @@ void print_usage(const char* prog) {
         << "\n"
         << "  " << prog << " orszag_tang\n"
         << "      Run Orszag-Tang vortex with all cleaning methods.\n"
-        << "\n"
-        << "  " << prog << " brio_wu mixed_glm\n"
-        << "      Run Brio-Wu shock tube with mixed GLM only.\n"
         << "\n"
         << "  " << prog << " field_loop mixed_glm\n"
         << "      Run field-loop advection with mixed GLM only.\n"
@@ -184,14 +180,12 @@ int main(int argc, char* argv[]) {
     std::vector<ProblemSpec> problems;
 
     if (positional.empty()) {
-        // No arguments → run both problems.
-        problems = {{"orszag_tang", "mhd_ot"}, {"brio_wu", "mhd_bw"}};
+        // No arguments → run the default problem.
+        problems = {{"orszag_tang", "mhd_ot"}};
     } else {
         const std::string p = positional[0];
         if (p == "orszag_tang") {
             problems = {{"orszag_tang", "mhd_ot"}};
-        } else if (p == "brio_wu") {
-            problems = {{"brio_wu", "mhd_bw"}};
         } else if (p == "field_loop") {
             problems = {{"field_loop", "mhd_fl"}};
         } else if (p == "divergence_advection") {
@@ -232,10 +226,6 @@ int main(int argc, char* argv[]) {
             std::cout << "\n#### Orszag-Tang vortex ####\n";
             gamma = 5.0 / 3.0;
             t_end = 0.5;
-        } else if (problem == "brio_wu") {
-            std::cout << "\n#### Brio-Wu shock tube (2D strip) ####\n";
-            gamma = 2.0;
-            t_end = 0.2;
         } else if (problem == "field_loop") {
             std::cout << "\n#### Field-loop advection ####\n";
             gamma = 5.0 / 3.0;

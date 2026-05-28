@@ -1,2 +1,2 @@
-problem,method,stage,step,time,reason,i,j,rho,pressure,total_energy,kinetic_energy,magnetic_energy,internal_energy,Bx,By,Bz,psi,divB,energy_policy
-orszag_tang,elliptic_projection,after_hydro,223,0.279256,non_positive_pressure,117,52,0.223179,-0.00417827,0.828391,0.452444,0.382214,-0.0062674,-0.471635,-0.736199,0,0,-2.18069,preserve_thermal_pressure
+problem,method,stage,step,time,reason,i,j,rho,pressure,total_energy,kinetic_energy,magnetic_energy,internal_energy,Bx,By,Bz,psi,divB,energy_policy,failure_stage,min_pressure_before_hydro,min_pressure_after_hydro,min_pressure_after_cleaning_B,min_pressure_after_energy_repair,min_pressure_after_full_step,projection_theta,retry_count,min_dt_used
+orszag_tang,elliptic_projection,after_hydro_step,266,0.314454,non_positive_pressure,115,50,0.201888,-1.07572e-06,0.752291,0.424031,0.328261,-1.61357e-06,-0.451348,-0.67291,0,0,0.0216912,preserve_thermal_pressure,after_hydro_step,8.04701e-06,-1.07572e-06,,,,1,8,0.000888088

@@ -11,8 +11,8 @@
 //  The HLLD step advances rho, momenta, energy, and B with ideal-MHD fluxes;
 //  the GLM step (selected via CleaningType) corrects divB on top.
 //
-//  Supported problems: Orszag-Tang vortex, Brio-Wu shock tube (2D strip),
-//  field-loop advection, and divergence advection.
+//  Supported problems: Orszag-Tang vortex, field-loop advection, and
+//  divergence advection.
 // =============================================================================
 
 #include <string>
@@ -28,17 +28,12 @@ struct MHDRunParams {
     // Ratio of specific heats used by the HLLD solver.
     double gamma = 5.0 / 3.0;
 
-    // Problem selector: "orszag_tang", "brio_wu", "field_loop",
+    // Problem selector: "orszag_tang", "field_loop",
     // or "divergence_advection".
     std::string problem = "orszag_tang";
 };
 
 void initialize_orszag_tang_2d(
-    std::vector<State>& U,
-    const MHDRunParams& params
-);
-
-void initialize_brio_wu_strip_2d(
     std::vector<State>& U,
     const MHDRunParams& params
 );

@@ -125,6 +125,7 @@ target_link_libraries(mhd_runner
     PUBLIC
         hlld
         glm2d
+        OpenMP::OpenMP_CXX
 )
 
 # ============================================================

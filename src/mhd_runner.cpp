@@ -161,6 +161,34 @@ double magnetic_energy_density(const State& cell) {
     );
 }
 
+struct CellThermo {
+    double rho = std::numeric_limits<double>::quiet_NaN();
+    double vx = std::numeric_limits<double>::quiet_NaN();
+    double vy = std::numeric_limits<double>::quiet_NaN();
+    double vz = std::numeric_limits<double>::quiet_NaN();
+    double kinetic = std::numeric_limits<double>::quiet_NaN();
+    double magnetic = std::numeric_limits<double>::quiet_NaN();
+    double thermal = std::numeric_limits<double>::quiet_NaN();
+    double pressure = std::numeric_limits<double>::quiet_NaN();
+};
+
+CellThermo decompose_cell(const State& cell, double gamma) {
+    CellThermo out;
+    out.rho = cell[RHO];
+    out.magnetic = magnetic_energy_density(cell);
+
+    if (std::isfinite(out.rho) && out.rho > 0.0) {
+        out.vx = cell[MX] / out.rho;
+        out.vy = cell[MY] / out.rho;
+        out.vz = cell[MZ] / out.rho;
+        out.kinetic = kinetic_energy_density(cell);
+        out.thermal = cell[E] - out.kinetic - out.magnetic;
+        out.pressure = (gamma - 1.0) * out.thermal;
+    }
+
+    return out;
+}
+
 // Task A helper: compute min raw pressure and min density from a state vector.
 MinPhysical compute_min_physical(
     const std::vector<State>& U,
@@ -341,6 +369,79 @@ void write_cleaning_failure_csv(
          << ",";
     write_double(min_dt_used);
     fout << "\n";
+}
+
+void write_powell_first_bad_cell_diagnostic(
+    const MHDRunParams& params,
+    int step,
+    double time,
+    double dt,
+    int i,
+    int j,
+    const State& before,
+    const State& after,
+    double divB
+) {
+    const std::string filename =
+        "results/mhd_runner/failures/"
+      + params.glm.out_prefix
+      + "_powell_source_first_bad_cell_diagnostic.csv";
+
+    ensure_parent_directory(filename);
+
+    std::ofstream out(filename);
+    if (!out) {
+        throw std::runtime_error(
+            "Failed to open Powell bad-cell diagnostic file: " + filename
+        );
+    }
+
+    const CellThermo b = decompose_cell(before, params.gamma);
+    const CellThermo a = decompose_cell(after, params.gamma);
+    const double s = -dt * divB;
+    const double u_dot_B_before =
+        b.vx * before[BX] + b.vy * before[BY] + b.vz * before[BZ];
+
+    out << "step,time,dt,i,j,"
+        << "rho_before,rho_after,"
+        << "vx_before,vy_before,vz_before,"
+        << "vx_after,vy_after,vz_after,"
+        << "Bx_before,By_before,Bz_before,"
+        << "Bx_after,By_after,Bz_after,"
+        << "E_before,E_after,"
+        << "kinetic_before,kinetic_after,"
+        << "magnetic_before,magnetic_after,"
+        << "thermal_before,thermal_after,"
+        << "p_before,p_after,"
+        << "divB,"
+        << "s_minus_dt_divB,"
+        << "delta_mx,delta_my,delta_mz,"
+        << "delta_Bx,delta_By,delta_Bz,"
+        << "delta_E,"
+        << "u_dot_B_before\n";
+
+    out << step << "," << time << "," << dt << ","
+        << i << "," << j << ","
+        << before[RHO] << "," << after[RHO] << ","
+        << b.vx << "," << b.vy << "," << b.vz << ","
+        << a.vx << "," << a.vy << "," << a.vz << ","
+        << before[BX] << "," << before[BY] << "," << before[BZ] << ","
+        << after[BX] << "," << after[BY] << "," << after[BZ] << ","
+        << before[E] << "," << after[E] << ","
+        << b.kinetic << "," << a.kinetic << ","
+        << b.magnetic << "," << a.magnetic << ","
+        << b.thermal << "," << a.thermal << ","
+        << b.pressure << "," << a.pressure << ","
+        << divB << ","
+        << s << ","
+        << after[MX] - before[MX] << ","
+        << after[MY] - before[MY] << ","
+        << after[MZ] - before[MZ] << ","
+        << after[BX] - before[BX] << ","
+        << after[BY] - before[BY] << ","
+        << after[BZ] - before[BZ] << ","
+        << after[E] - before[E] << ","
+        << u_dot_B_before << "\n";
 }
 
 MHDRunDiagnostics compute_mhd_run_diagnostics(
@@ -549,12 +650,16 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
         params.dt = dt_sub;
 
         std::vector<State> Uold;
+        std::vector<State> Ubefore_powell;
         const bool repair_energy =
             params.energy_policy == CleaningEnergyPolicy::PreserveThermalPressure
          && pressure_preserving_policy_applies(type);
 
         if (repair_energy) {
             Uold = U;
+        }
+        if (type == CleaningType::POWELL_SOURCE) {
+            Ubefore_powell = U;
         }
 
         const ProjectionResult projection =
@@ -616,6 +721,32 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
             );
 
         if (bad.found) {
+            if (type == CleaningType::POWELL_SOURCE &&
+                bad.reason == "non_positive_pressure" &&
+                !Ubefore_powell.empty()) {
+                const int id = idx2d(bad.i, bad.j, params.nx);
+                const double divB_before =
+                    compute_fv_divB_cell_2d(
+                        Ubefore_powell,
+                        params.nx,
+                        params.ny,
+                        bad.i,
+                        bad.j,
+                        params.dx,
+                        params.dy
+                    );
+                write_powell_first_bad_cell_diagnostic(
+                    run_params,
+                    step + 1,
+                    time + dt_sub * static_cast<double>(sub + 1),
+                    dt_sub,
+                    bad.i,
+                    bad.j,
+                    Ubefore_powell[id],
+                    U[id],
+                    divB_before
+                );
+            }
             stats.bad_state = bad;
             stats.failure_time =
                 time + dt_sub * static_cast<double>(sub + 1);
@@ -1615,6 +1746,8 @@ void run_mhd_2d_case(
 
         BadStateRecord after_hydro_bad;
         CleaningAdvanceStats cleaning_stats;
+        MinPhysical accepted_after_hydro_min;
+        bool have_accepted_after_hydro_min = false;
 
         while (true) {
             U = U_begin;
@@ -1650,6 +1783,9 @@ void run_mhd_2d_case(
                 // Retries exhausted.
                 break;
             }
+
+            accepted_after_hydro_min = compute_min_physical(U, gamma);
+            have_accepted_after_hydro_min = true;
 
             // ------------------------------------------------------------------
             // Step 2: divergence-cleaning update (any CleaningType).
@@ -1687,9 +1823,12 @@ void run_mhd_2d_case(
                 std::min(step_stage_mins.min_pressure_before_hydro,
                          after_hydro_bad.pressure);
         } else {
-            const MinPhysical mp_hydro = compute_min_physical(U, gamma);
-            step_stage_mins.min_pressure_after_hydro = mp_hydro.min_pressure;
-            step_stage_mins.min_density_after_hydro  = mp_hydro.min_density;
+            if (have_accepted_after_hydro_min) {
+                step_stage_mins.min_pressure_after_hydro =
+                    accepted_after_hydro_min.min_pressure;
+                step_stage_mins.min_density_after_hydro =
+                    accepted_after_hydro_min.min_density;
+            }
         }
 
         step_stage_mins.min_pressure_after_cleaning_B =
@@ -1787,80 +1926,6 @@ void run_mhd_2d_case(
                       << "  rho=" << after_hydro_bad.rho
                       << "  p=" << after_hydro_bad.pressure
                       << "  retries=" << total_retries
-                      << "\n";
-
-            t = failure_time;
-            step = next_step;
-            break;
-        }
-
-        // ------------------------------------------------------------------
-        // Safety re-scan before cleaning (was "before_cleaning" in old code).
-        // With the retry loop, this should always pass if after_hydro passed,
-        // but we keep it as an explicit contract check.
-        // ------------------------------------------------------------------
-        const BadStateRecord before_cleaning_bad =
-            scan_physical_state(
-                U,
-                nx,
-                ny,
-                dx,
-                dy,
-                gamma,
-                "before_cleaning"
-            );
-
-        if (before_cleaning_bad.found) {
-            stopped_for_failure = true;
-            failure_time = next_t;
-            failure_reason =
-                "pre_cleaning_positivity_failure:" + before_cleaning_bad.reason;
-
-            step_stage_mins.failure_stage = "after_hydro_step";
-            run_stage_mins.failure_stage  = "after_hydro_step";
-
-            write_cleaning_failure_csv(
-                params,
-                name,
-                next_step,
-                failure_time,
-                before_cleaning_bad,
-                step_stage_mins,
-                1.0,
-                total_retries,
-                min_dt_used
-            );
-
-            const LocalDivBNorms failed_norms =
-                compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
-            const MHDRunDiagnostics failed_diag =
-                compute_mhd_run_diagnostics(U, gamma, dx * dy);
-
-            write_mhd_diagnostic_row(
-                diag,
-                next_step,
-                failure_time,
-                params.glm.dt,
-                failed_norms,
-                failed_diag,
-                0,
-                0,
-                std::numeric_limits<double>::quiet_NaN(),
-                std::numeric_limits<double>::quiet_NaN(),
-                std::numeric_limits<double>::quiet_NaN(),
-                true
-            );
-
-            std::cerr << "WARNING: stopping MHD run before cleaning due to bad state"
-                      << "  problem=" << params.problem
-                      << "  cleaning=" << name
-                      << "  step=" << next_step
-                      << "  time=" << failure_time
-                      << "  reason=" << before_cleaning_bad.reason
-                      << "  cell=(" << before_cleaning_bad.i
-                      << "," << before_cleaning_bad.j << ")"
-                      << "  rho=" << before_cleaning_bad.rho
-                      << "  p=" << before_cleaning_bad.pressure
                       << "\n";
 
             t = failure_time;

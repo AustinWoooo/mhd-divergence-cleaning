@@ -1,2 +1,0 @@
-problem,method,final_time_reached,failure_time,failure_reason,final_L1_fv,final_L2_fv,final_Linf_fv,energy_initial,energy_final,energy_drift,min_pressure,min_density,cleaning_subcycles_total,projection_iterations_total
-brio_wu,elliptic_projection,1,nan,,0,0,0,1.33125,1.33125,9.50726e-15,0.0993881,0.124581,6,6

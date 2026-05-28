@@ -1029,35 +1029,6 @@ void initialize_orszag_tang_2d(
     }
 }
 
-void initialize_brio_wu_strip_2d(
-    std::vector<State>& U,
-    const MHDRunParams& params
-) {
-    const int nx = params.glm.nx;
-    const int ny = params.glm.ny;
-    const double dx = params.glm.dx;
-    const double gamma = params.gamma;
-
-    if (static_cast<int>(U.size()) != nx * ny) {
-        throw std::runtime_error("initialize_brio_wu_strip_2d: U size mismatch.");
-    }
-
-    // Brio & Wu (1988) 1D shock tube, replicated along y to make a 2D strip.
-    // Discontinuity at x = xlen/2. Standard convention: gamma = 2.
-    const double x_mid = 0.5 * params.glm.xlen;
-
-    const PrimState WL(1.0,   0.0, 0.0, 0.0,  1.0,  0.75,  1.0, 0.0, 0.0);
-    const PrimState WR(0.125, 0.0, 0.0, 0.0,  0.1,  0.75, -1.0, 0.0, 0.0);
-
-    for (int j = 0; j < ny; ++j) {
-        for (int i = 0; i < nx; ++i) {
-            const double x = (i + 0.5) * dx;
-            const PrimState& W = (x < x_mid) ? WL : WR;
-            U[idx2d(i, j, nx)] = prim_to_state(W, gamma);
-        }
-    }
-}
-
 void initialize_field_loop_2d(
     std::vector<State>& U,
     const MHDRunParams& params
@@ -1185,8 +1156,6 @@ void run_mhd_2d_case(
     std::vector<State> U(nx * ny);
     if (params.problem == "orszag_tang") {
         initialize_orszag_tang_2d(U, params);
-    } else if (params.problem == "brio_wu") {
-        initialize_brio_wu_strip_2d(U, params);
     } else if (params.problem == "field_loop") {
         initialize_field_loop_2d(U, params);
     } else if (params.problem == "divergence_advection") {

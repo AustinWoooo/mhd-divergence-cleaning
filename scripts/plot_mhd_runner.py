@@ -124,6 +124,12 @@ METHODS = {
         "ls": "--",
         "primary": False,
     },
+    "powell_source_subcycled": {
+        "label": "Powell subcycled",
+        "color": "#7f7f7f",
+        "ls": "-.",
+        "primary": False,
+    },
 }
 
 # Set to True if you want parabolic/projection/Powell included in the new
@@ -137,6 +143,7 @@ CLEANING_TYPES = [
     "parabolic",
     "elliptic_projection",
     "powell_source",
+    "powell_source_subcycled",
     "mixed_eglm",
     "gi_mixed_eglm",
 ]

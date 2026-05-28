@@ -27,6 +27,7 @@
 #include "glm.hpp"
 #include "glm2d.hpp"
 #include "glm2d_common.hpp"
+#include "powell2d.hpp"
 #include "projection2d.hpp"
 
 namespace fs = std::filesystem;
@@ -52,6 +53,7 @@ inline State prim_to_state(const PrimState& W, double gamma) {
 // Below this, the full projection cannot be made physical and we record the
 // failure.  Do NOT claim exact projection when theta < 1.
 constexpr double MIN_PROJECTION_THETA = 1.0 / 64.0;
+constexpr double POWELL_SOURCE_CFL = 0.02;
 
 // -----------------------------------------------------------------------------
 //  Stage-level positivity diagnostics (Task A)
@@ -373,6 +375,7 @@ void write_cleaning_failure_csv(
 
 void write_powell_first_bad_cell_diagnostic(
     const MHDRunParams& params,
+    const std::string& method_name,
     int step,
     double time,
     double dt,
@@ -385,7 +388,9 @@ void write_powell_first_bad_cell_diagnostic(
     const std::string filename =
         "results/mhd_runner/failures/"
       + params.glm.out_prefix
-      + "_powell_source_first_bad_cell_diagnostic.csv";
+      + "_"
+      + method_name
+      + "_first_bad_cell_diagnostic.csv";
 
     ensure_parent_directory(filename);
 
@@ -609,6 +614,113 @@ ProjectionResult apply_cleaning_update_for_runner(
     return {};
 }
 
+int powell_source_subcycle_count(
+    const std::vector<State>& U,
+    const GLM2DParams& params,
+    double dt
+) {
+    const std::vector<double> divB =
+        compute_fv_divB_field_2d(U, params.nx, params.ny, params.dx, params.dy);
+
+    double max_s = 0.0;
+    for (double d : divB) {
+        if (std::isfinite(d)) {
+            max_s = std::max(max_s, std::abs(dt * d));
+        }
+    }
+
+    return std::max(
+        1,
+        static_cast<int>(std::ceil(max_s / POWELL_SOURCE_CFL))
+    );
+}
+
+CleaningAdvanceStats apply_powell_source_subcycled_for_runner(
+    std::vector<State>& U,
+    GLM2DParams params,
+    const MHDRunParams& run_params,
+    const std::string& method_name,
+    int step,
+    double time,
+    double dt_mhd,
+    double gamma
+) {
+    CleaningAdvanceStats stats;
+    const int nsub = powell_source_subcycle_count(U, params, dt_mhd);
+    stats.subcycles = nsub;
+
+    const double dt_sub = dt_mhd / static_cast<double>(nsub);
+    for (int sub = 0; sub < nsub; ++sub) {
+        params.dt = dt_sub;
+        const std::vector<State> Ubefore = U;
+
+        apply_powell_source_2d(U, params);
+
+        {
+            const MinPhysical mp = compute_min_physical(U, gamma);
+            stats.stage_mins.min_pressure_after_cleaning_B =
+                std::min(stats.stage_mins.min_pressure_after_cleaning_B,
+                         mp.min_pressure);
+            stats.stage_mins.min_density_after_cleaning_B =
+                std::min(stats.stage_mins.min_density_after_cleaning_B,
+                         mp.min_density);
+            stats.stage_mins.min_pressure_after_energy_repair =
+                std::min(stats.stage_mins.min_pressure_after_energy_repair,
+                         mp.min_pressure);
+            stats.stage_mins.min_density_after_energy_repair =
+                std::min(stats.stage_mins.min_density_after_energy_repair,
+                         mp.min_density);
+        }
+
+        const BadStateRecord bad =
+            scan_physical_state(
+                U,
+                params.nx,
+                params.ny,
+                params.dx,
+                params.dy,
+                gamma,
+                "after_powell_subcycle_update"
+            );
+
+        if (bad.found) {
+            if (bad.reason == "non_positive_pressure") {
+                const int id = idx2d(bad.i, bad.j, params.nx);
+                const double divB_before =
+                    compute_fv_divB_cell_2d(
+                        Ubefore,
+                        params.nx,
+                        params.ny,
+                        bad.i,
+                        bad.j,
+                        params.dx,
+                        params.dy
+                    );
+                write_powell_first_bad_cell_diagnostic(
+                    run_params,
+                    method_name,
+                    step + 1,
+                    time + dt_sub * static_cast<double>(sub + 1),
+                    dt_sub,
+                    bad.i,
+                    bad.j,
+                    Ubefore[id],
+                    U[id],
+                    divB_before
+                );
+            }
+
+            stats.bad_state = bad;
+            stats.failure_time =
+                time + dt_sub * static_cast<double>(sub + 1);
+            stats.stage_mins.failure_stage = "after_powell_subcycle_update";
+            return stats;
+        }
+    }
+
+    return stats;
+}
+
 CleaningAdvanceStats apply_cleaning_with_subcycles(
     std::vector<State>& U,
     CleaningType type,
@@ -625,6 +737,19 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
 
     if (type == CleaningType::NONE || dt_mhd <= 0.0) {
         return stats;
+    }
+
+    if (type == CleaningType::POWELL_SOURCE_SUBCYCLED) {
+        return apply_powell_source_subcycled_for_runner(
+            U,
+            params,
+            run_params,
+            method_name,
+            step,
+            time,
+            dt_mhd,
+            gamma
+        );
     }
 
     const double dt_clean =
@@ -737,6 +862,7 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
                     );
                 write_powell_first_bad_cell_diagnostic(
                     run_params,
+                    method_name,
                     step + 1,
                     time + dt_sub * static_cast<double>(sub + 1),
                     dt_sub,
@@ -1839,6 +1965,10 @@ void run_mhd_2d_case(
             cleaning_stats.stage_mins.min_pressure_after_energy_repair;
         step_stage_mins.min_density_after_energy_repair =
             cleaning_stats.stage_mins.min_density_after_energy_repair;
+        if (!cleaning_stats.stage_mins.failure_stage.empty()) {
+            step_stage_mins.failure_stage =
+                cleaning_stats.stage_mins.failure_stage;
+        }
 
         // Update global run minimums (for summary).
         run_stage_mins.min_pressure_before_hydro = std::min(
@@ -1969,9 +2099,10 @@ void run_mhd_2d_case(
                 "cleaning_induced_failure:" + cleaning_stats.bad_state.reason
                 + ":retries=" + std::to_string(total_retries);
 
-            // Determine failure stage from per-stage minimums.
-            step_stage_mins.failure_stage =
-                determine_failure_stage(step_stage_mins);
+            if (step_stage_mins.failure_stage.empty()) {
+                step_stage_mins.failure_stage =
+                    determine_failure_stage(step_stage_mins);
+            }
             run_stage_mins.failure_stage = step_stage_mins.failure_stage;
 
             write_cleaning_failure_csv(

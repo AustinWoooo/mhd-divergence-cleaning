@@ -637,7 +637,10 @@ double max_signal_speed_2d(
     bool include_ch
 ) {
     double smax = 0.0;
-    for (const State& s : U) {
+    const std::ptrdiff_t ncell = static_cast<std::ptrdiff_t>(U.size());
+#pragma omp parallel for schedule(static) reduction(max : smax)
+    for (std::ptrdiff_t id = 0; id < ncell; ++id) {
+        const State& s = U[id];
         const PrimState W = state_to_prim(s, gamma);
         const double rho = std::max(W.rho, TINY_NUMBER);
         const double a2  = gamma * std::max(W.p, 0.0) / rho;
@@ -689,7 +692,10 @@ std::vector<State> compute_rhs_blended_2d(
     std::vector<State> flux_x(ncell);
     std::vector<State> flux_y(ncell);
 
-    // X-direction Riemann problems.
+    // X-direction Riemann problems. Each face writes a unique flux_x[face]
+    // and compute_flux/compute_llf_flux are pure, so the iterations are
+    // independent and safe to run concurrently.
+#pragma omp parallel for schedule(static)
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             const int iL = periodic_index(i - 1, nx);
@@ -705,7 +711,8 @@ std::vector<State> compute_rhs_blended_2d(
         }
     }
 
-    // Y-direction Riemann problems.
+    // Y-direction Riemann problems (same independence as the X sweep).
+#pragma omp parallel for schedule(static)
     for (int j = 0; j < ny; ++j) {
         const int jL = periodic_index(j - 1, ny);
         for (int i = 0; i < nx; ++i) {

@@ -658,14 +658,22 @@ double max_signal_speed_2d(
 
 // -----------------------------------------------------------------------------
 //  Finite-volume RHS = -div(F) on a periodic grid.
-//  Calls MHD::compute_flux at every interface; does not re-implement HLLD.
+//  Calls MHD::compute_flux (HLLD) at every interface, falling back to the
+//  diffusive MHD::compute_llf_flux on faces flagged in the LLF masks. Does not
+//  re-implement either Riemann solver.
 // -----------------------------------------------------------------------------
 //  Face-flux storage convention:
 //    flux_x[idx2d(i, j, nx)] = numerical flux between cells (i-1, j) and (i, j)
 //    flux_y[idx2d(i, j, nx)] = numerical flux between cells (i, j-1) and (i, j)
+//
+//  llf_face_x[face] / llf_face_y[face] select the diffusive LLF flux on that
+//  face. A face flux is shared by both adjacent cells, so swapping HLLD <-> LLF
+//  on a face keeps the conservative update exactly conservative.
 
-std::vector<State> compute_rhs_hlld_2d(
+std::vector<State> compute_rhs_blended_2d(
     const std::vector<State>& U,
+    const std::vector<char>& llf_face_x,
+    const std::vector<char>& llf_face_y,
     int nx, int ny,
     double dx, double dy,
     double gamma
@@ -679,9 +687,12 @@ std::vector<State> compute_rhs_hlld_2d(
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             const int iL = periodic_index(i - 1, nx);
+            const int face = idx2d(i, j, nx);
             const PrimState WL = state_to_prim(U[idx2d(iL, j, nx)], gamma);
             const PrimState WR = state_to_prim(U[idx2d(i,  j, nx)], gamma);
-            flux_x[idx2d(i, j, nx)] = compute_flux(WL, WR, /*direction=*/0, gamma);
+            flux_x[face] = llf_face_x[face]
+                ? compute_llf_flux(WL, WR, /*direction=*/0, gamma)
+                : compute_flux(WL, WR, /*direction=*/0, gamma);
         }
     }
 
@@ -689,9 +700,12 @@ std::vector<State> compute_rhs_hlld_2d(
     for (int j = 0; j < ny; ++j) {
         const int jL = periodic_index(j - 1, ny);
         for (int i = 0; i < nx; ++i) {
+            const int face = idx2d(i, j, nx);
             const PrimState WL = state_to_prim(U[idx2d(i, jL, nx)], gamma);
             const PrimState WR = state_to_prim(U[idx2d(i, j,  nx)], gamma);
-            flux_y[idx2d(i, j, nx)] = compute_flux(WL, WR, /*direction=*/1, gamma);
+            flux_y[face] = llf_face_y[face]
+                ? compute_llf_flux(WL, WR, /*direction=*/1, gamma)
+                : compute_flux(WL, WR, /*direction=*/1, gamma);
         }
     }
 
@@ -719,6 +733,95 @@ std::vector<State> compute_rhs_hlld_2d(
     return RHS;
 }
 
+// Raw positivity test on a conserved cell: finite, positive density, and
+// positive thermal pressure (no flooring).
+bool cell_is_physical(const State& s, double gamma) {
+    const double rho = s[RHO];
+    if (!std::isfinite(rho) || rho <= 0.0) {
+        return false;
+    }
+    const double ke =
+        0.5 * (s[MX]*s[MX] + s[MY]*s[MY] + s[MZ]*s[MZ]) / rho;
+    const double me =
+        0.5 * (s[BX]*s[BX] + s[BY]*s[BY] + s[BZ]*s[BZ]);
+    const double p = (gamma - 1.0) * (s[E] - ke - me);
+    return std::isfinite(p) && p > 0.0;
+}
+
+// -----------------------------------------------------------------------------
+//  Positivity-preserving stage update (Option A).
+//
+//  Forms  new[id] = base[id] + coeff * dt * RHS(flux_state)  using HLLD fluxes.
+//  Any cell whose updated state has non-positive density or pressure has the
+//  four faces bounding it switched to the diffusive LLF flux, and the update is
+//  recomputed. Because a face flux is shared, this stays conservative. The LLF
+//  masks only ever grow, so the sweep loop is guaranteed to terminate; MAX_SWEEPS
+//  bounds the cost. Any cell still non-positive after the limiter is left for the
+//  runner's positivity scan to flag (we never floor silently).
+//
+//  For runs that never hit a positivity failure (e.g. None / GLM on Orszag-Tang)
+//  no faces are ever flagged and the result is bit-identical to plain HLLD.
+// -----------------------------------------------------------------------------
+
+std::vector<State> positivity_limited_stage(
+    const std::vector<State>& base,
+    const std::vector<State>& flux_state,
+    double coeff,
+    double dt,
+    int nx, int ny,
+    double dx, double dy,
+    double gamma
+) {
+    const int ncell = nx * ny;
+    constexpr int MAX_SWEEPS = 8;
+
+    std::vector<char> llf_x(ncell, 0);
+    std::vector<char> llf_y(ncell, 0);
+    std::vector<State> out(ncell);
+
+    for (int sweep = 0; ; ++sweep) {
+        const std::vector<State> RHS =
+            compute_rhs_blended_2d(
+                flux_state, llf_x, llf_y, nx, ny, dx, dy, gamma);
+
+        for (int id = 0; id < ncell; ++id) {
+            for (int k = 0; k < NVAR; ++k) {
+                out[id][k] = base[id][k] + coeff * dt * RHS[id][k];
+            }
+        }
+
+        if (sweep >= MAX_SWEEPS) {
+            break;  // best effort; runner's positivity scan handles any remainder
+        }
+
+        int newly_marked = 0;
+        for (int j = 0; j < ny; ++j) {
+            const int jp = periodic_index(j + 1, ny);
+            for (int i = 0; i < nx; ++i) {
+                if (cell_is_physical(out[idx2d(i, j, nx)], gamma)) {
+                    continue;
+                }
+                const int ip = periodic_index(i + 1, nx);
+                char* faces[4] = {
+                    &llf_x[idx2d(i,  j,  nx)],   // left
+                    &llf_x[idx2d(ip, j,  nx)],   // right
+                    &llf_y[idx2d(i,  j,  nx)],   // bottom
+                    &llf_y[idx2d(i,  jp, nx)],   // top
+                };
+                for (char* f : faces) {
+                    if (*f == 0) { *f = 1; ++newly_marked; }
+                }
+            }
+        }
+
+        if (newly_marked == 0) {
+            break;  // offending cells already fully LLF; nothing more to do
+        }
+    }
+
+    return out;
+}
+
 // -----------------------------------------------------------------------------
 //  Heun (RK2) update with HLLD fluxes only. Cleaning is applied separately.
 //
@@ -736,14 +839,10 @@ void rk2_step_hlld_2d(
 ) {
     const int ncell = nx * ny;
 
-    const std::vector<State> R1 = compute_rhs_hlld_2d(U, nx, ny, dx, dy, gamma);
-
-    std::vector<State> Us(ncell);
-    for (int id = 0; id < ncell; ++id) {
-        for (int k = 0; k < NVAR; ++k) {
-            Us[id][k] = U[id][k] + dt * R1[id][k];
-        }
-    }
+    // Predictor: Us = U + dt * RHS(U), positivity-limited (Option A).
+    std::vector<State> Us =
+        positivity_limited_stage(U, U, /*coeff=*/1.0, dt,
+                                 nx, ny, dx, dy, gamma);
 
     // Task C: optional projection on the intermediate predictor state.
     if (stage_glm_params != nullptr) {
@@ -778,13 +877,15 @@ void rk2_step_hlld_2d(
         }
     }
 
-    const std::vector<State> R2 = compute_rhs_hlld_2d(Us, nx, ny, dx, dy, gamma);
-
+    // Corrector: U = 0.5*(U + Us) + 0.5*dt*RHS(Us), positivity-limited (Option A).
+    std::vector<State> base(ncell);
     for (int id = 0; id < ncell; ++id) {
         for (int k = 0; k < NVAR; ++k) {
-            U[id][k] = 0.5 * (U[id][k] + Us[id][k] + dt * R2[id][k]);
+            base[id][k] = 0.5 * (U[id][k] + Us[id][k]);
         }
     }
+    U = positivity_limited_stage(base, Us, /*coeff=*/0.5, dt,
+                                 nx, ny, dx, dy, gamma);
 }
 
 // Overload without stage projection (backward-compatible default).

@@ -88,9 +88,18 @@ State physical_flux(const PrimState& W, double gamma);
 
 State hlld_flux_normal(const PrimState& WL, const PrimState& WR, double gamma);
 
+// Local Lax-Friedrichs (Rusanov) flux in the normal frame. Far more diffusive
+// than HLLD; used as a positivity-preserving fallback flux.
+State llf_flux_normal(const PrimState& WL, const PrimState& WR, double gamma);
+
 // Public interface: rotate to normal frame -> HLLD -> rotate flux back.
 // direction = 0 (X-flux) or 1 (Y-flux).
 State compute_flux(const PrimState& W_L, const PrimState& W_R,
                    int direction, double gamma);
+
+// Same as compute_flux but with the diffusive LLF flux. Used as the fallback
+// for cells where the HLLD update would produce non-positive density/pressure.
+State compute_llf_flux(const PrimState& W_L, const PrimState& W_R,
+                       int direction, double gamma);
 
 } // namespace MHD

@@ -40,6 +40,7 @@ const std::vector<CleaningType> ALL_CASES = {
     CleaningType::PARABOLIC,
     CleaningType::ELLIPTIC_PROJECTION,
     CleaningType::POWELL_SOURCE,
+    CleaningType::POWELL_SOURCE_SUBCYCLED,
     CleaningType::MIXED_EGLM,
     CleaningType::GI_MIXED_EGLM
 };
@@ -61,6 +62,7 @@ void print_usage(const char* prog) {
         << "              divergence_advection  (default: orszag_tang)\n"
         << "  cleaning  : none | parabolic | hyperbolic_glm | mixed_glm\n"
         << "              elliptic_projection | powell_source\n"
+        << "              powell_source_subcycled\n"
         << "              mixed_eglm | gi_mixed_eglm  (default: all)\n"
         << "\n"
         << "Examples:\n"

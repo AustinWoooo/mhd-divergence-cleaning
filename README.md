@@ -13,6 +13,23 @@ HLLD solver. The HLLD solver is kept as a pure ideal-MHD flux kernel. Some newer
 plugin components are currently tested separately and are not yet fully wired into
 the production `test_mhd_runner`.
 
+## Numerical scheme
+
+The integrated runner uses a second-order **high-resolution shock-capturing
+(HRSC)** scheme built around the HLLD flux:
+
+- **Spatial reconstruction** — piecewise-linear MUSCL reconstruction of the
+  primitive variables to the cell faces, with a TVD slope limiter
+  (`minmod`, `vanleer`, or `mc`; default `mc`). Because every limiter is TVD,
+  reconstructed face density and pressure stay positive whenever the cell
+  averages are positive. Falling back to `pcm` recovers the first-order Godunov
+  scheme for comparison. See [`include/mhd_reconstruction.hpp`](include/mhd_reconstruction.hpp).
+- **Riemann solver** — HLLD (Miyoshi & Kusano 2005), with a Local
+  Lax-Friedrichs (LLF) positivity fallback. On faces flagged by the positivity
+  limiter the scheme drops to first-order states with the diffusive LLF flux.
+- **Time integration** — SSP-RK2 (Heun), with a dual-energy formalism for the
+  low-beta cold cores.
+
 ---
 
 ## Build
@@ -37,6 +54,7 @@ ctest --test-dir build --output-on-failure
 | Executable | Description |
 |---|---|
 | `test_hlld_primitive_recovery` | Tests raw vs checked primitive recovery and verifies that raw pressure is not silently floored |
+| `test_mhd_reconstruction` | Unit tests for the MUSCL slope limiters: linear exactness, extremum clipping, and bounded (positivity-preserving) face values |
 | `test_cleaning_plugins` | Tests the first-stage cleaning plugin interface and GLM flux wrapper |
 | `test_mhd_runner` | Integrated 2D HLLD + divergence-control runner |
 | `test_glm_2d` | Standalone 2D GLM cleaning test on a divergence pulse |
@@ -47,7 +65,7 @@ ctest --test-dir build --output-on-failure
 ## `test_mhd_runner` — Usage
 
 ```bash
-./build/test_mhd_runner [problem] [cleaning...]
+./build/test_mhd_runner [options] [problem] [cleaning...]
 ```
 
 ### Arguments
@@ -56,6 +74,9 @@ ctest --test-dir build --output-on-failure
 |---|---|---|
 | `problem` | `orszag_tang` \| `brio_wu` \| `field_loop` \| `divergence_advection` | `orszag_tang` and `brio_wu` |
 | `cleaning` | see table below | all available methods |
+| `--reconstruction` | `pcm` (first-order Godunov) \| `plm` (second-order MUSCL HRSC) | `plm` |
+| `--first-order` | alias for `--reconstruction pcm` | — |
+| `--limiter` | `minmod` \| `vanleer` \| `mc` (only used for `plm`) | `mc` |
 
 ### Cleaning / divergence-control method names
 

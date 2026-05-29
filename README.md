@@ -72,7 +72,7 @@ ctest --test-dir build --output-on-failure
 
 | Argument | Values | Default |
 |---|---|---|
-| `problem` | `orszag_tang` \| `brio_wu` \| `field_loop` \| `divergence_advection` | `orszag_tang` and `brio_wu` |
+| `problem` | `orszag_tang` \| `field_loop` \| `divergence_advection` | `orszag_tang`|
 | `cleaning` | see table below | all available methods |
 | `--reconstruction` | `pcm` (first-order Godunov) \| `plm` (second-order MUSCL HRSC) | `plm` |
 | `--first-order` | alias for `--reconstruction pcm` | — |
@@ -107,12 +107,10 @@ ctest --test-dir build --output-on-failure
 
 # One problem, all cleaning methods
 ./build/test_mhd_runner orszag_tang
-./build/test_mhd_runner brio_wu
 ./build/test_mhd_runner field_loop
 ./build/test_mhd_runner divergence_advection
 
 # One problem, one cleaning method
-./build/test_mhd_runner brio_wu mixed_glm
 ./build/test_mhd_runner orszag_tang hyperbolic_glm
 ./build/test_mhd_runner field_loop mixed_glm
 ./build/test_mhd_runner divergence_advection mixed_glm
@@ -151,7 +149,6 @@ Filename prefixes:
 | Problem | Prefix |
 |---|---|
 | Orszag-Tang vortex | `mhd_ot` |
-| Brio-Wu shock tube | `mhd_bw` |
 | Field-loop advection | `mhd_fl` |
 | Divergence advection | `mhd_da` |
 
@@ -166,13 +163,6 @@ Generated `results/` files are reproducibility artifacts. Do not commit regenera
 - Smooth, periodic, fully 2D MHD vortex problem
 - Parameters: γ = 5/3, t_end = 0.5, N = 128
 - Useful for comparing robustness and divergence growth in a nonlinear MHD flow
-
-### Brio-Wu Shock Tube 2D Strip
-
-- 1D MHD shock tube replicated as a 2D strip
-- Parameters: γ = 2, t_end = 0.2, N = 128
-- Useful as a shock-capturing stress test
-- Current boundary and strip setup should be interpreted carefully when discussing divergence diagnostics
 
 ### Field-Loop Advection
 

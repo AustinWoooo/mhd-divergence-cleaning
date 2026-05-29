@@ -5,10 +5,11 @@
 #include "glm2d_types.hpp"
 #include "state.hpp"
 
-// EGLM source terms for the 2D standalone cleaning framework.
+// Extended GLM (EGLM) source terms for the 2D cleaning framework.
 //
 // This is NOT Powell.
-// EGLM adds non-conservative momentum and energy source terms:
+// EGLM adds the formal non-conservative extended-GLM momentum and energy source
+// terms used by the mixed_eglm method:
 //
 //   d(rho*u)/dt = -(divB) B
 //   dE/dt       = -B . grad(psi)

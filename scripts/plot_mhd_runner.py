@@ -8,7 +8,8 @@ Visualise results produced by the integrated HLLD + GLM runner
 Four figures are saved:
 
   figures/mhd_runner/mhd_runner_ot_divB.png
-      Orszag-Tang: L2(divB_fv) vs time for all cleaning methods.
+      Orszag-Tang: normalized finite-volume L2(divB) vs time for the
+      primary divergence-control methods.
 
   figures/mhd_runner/mhd_runner_ot_snapshot.png
       Orszag-Tang: 2D final-state maps (density, pressure, |divB|)
@@ -125,21 +126,21 @@ METHODS = {
         "primary": False,
     },
     "powell_source_subcycled": {
-        "label": "Powell subcycled",
+        "label": "Powell subcycled control",
         "color": "#7f7f7f",
         "ls": "-.",
         "primary": False,
     },
     "powell_source_limited": {
-        "label": "Powell limited",
+        "label": "Pressure-limited Powell",
         "color": "#17becf",
         "ls": "--",
         "primary": False,
     },
 }
 
-# Set to True if you want parabolic/projection/Powell included in the new
-# report figures. The summary CSV always includes every method below.
+# Set to True if you want the cautionary Powell robustness-control variants
+# included in report figures. The summary CSV always includes every method below.
 INCLUDE_CAUTIONARY_METHODS = False
 
 CLEANING_TYPES = [

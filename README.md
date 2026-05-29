@@ -1,17 +1,17 @@
 # MHD Divergence Cleaning — 2D Test Suite
 
 This repository contains a 2D finite-volume ideal-MHD solver using an HLLD
-Riemann solver, together with several modular / operator-split divergence-control
-methods for studying numerical violations of
+Riemann solver, together with several divergence-control methods for studying
+numerical violations of
 
 \[
 \nabla \cdot \mathbf{B} = 0.
 \]
 
-The current integrated runner applies divergence-control methods outside the core
-HLLD solver. The HLLD solver is kept as a pure ideal-MHD flux kernel. Some newer
-plugin components are currently tested separately and are not yet fully wired into
-the production `test_mhd_runner`.
+The current integrated runner applies the divergence-control update outside the
+core HLLD flux kernel. The HLLD solver is kept as a pure ideal-MHD flux kernel.
+The GLM-family updates are therefore operator-split from the ideal-MHD flux
+update in the integrated runner.
 
 ## Numerical scheme
 
@@ -27,6 +27,9 @@ The integrated runner uses a second-order **high-resolution shock-capturing
 - **Riemann solver** — HLLD (Miyoshi & Kusano 2005), with a Local
   Lax-Friedrichs (LLF) positivity fallback. On faces flagged by the positivity
   limiter the scheme drops to first-order states with the diffusive LLF flux.
+  The HLLD kernel also guards near-degenerate star-state denominators with
+  relative-tolerance checks; there is not currently a separate nonfinite
+  star-state retry inside `MHD::compute_flux`.
 - **Time integration** — SSP-RK2 (Heun), with a dual-energy formalism for the
   low-beta cold cores.
 
@@ -80,21 +83,37 @@ ctest --test-dir build --output-on-failure
 
 ### Cleaning / divergence-control method names
 
-| Name | Method |
-|---|---|
-| `none` | No cleaning / baseline |
-| `parabolic` | Parabolic divergence diffusion |
-| `hyperbolic_glm` | Hyperbolic GLM divergence propagation |
-| `mixed_glm` | Mixed GLM: hyperbolic propagation plus ψ damping |
-| `elliptic_projection` | Elliptic projection using a Poisson solve |
-| `powell_source` | Powell / 8-wave non-conservative source control |
-| `mixed_eglm` | Mixed GLM with EGLM momentum/energy source terms |
-| `gi_mixed_eglm` | Galilean-invariant mixed EGLM source-term variant |
+Main divergence-control methods:
+
+| Name | Equation / correction | Conservation / splitting | Divergence-error behavior | Expected advantage | Report limitation |
+|---|---|---|---|---|---|
+| `none` | No cleaning; ideal-MHD HLLD update only | Conservative finite-volume update, aside from documented positivity safeguards | Lets numerical divB evolve unchecked | Baseline for every comparison | Not a cleaning method |
+| `hyperbolic_glm` | Dedner B-psi subsystem: `dB/dt + grad(psi)=0`, `dpsi/dt + ch^2 divB=0` | Operator-split; psi energy is not included in conserved energy | Transports divB as waves at cleaning speed `ch` | Local finite-speed correction | Split from HLLD flux in the runner |
+| `mixed_glm` | Hyperbolic GLM plus `psi <- psi exp(-dt ch^2/cp^2)` | Operator-split; psi energy is not included in conserved energy | Transports and damps divB | Usually more robust than pure hyperbolic GLM | Damping is applied as a split scalar decay |
+| `parabolic` | `dB/dt = cp^2 grad(divB)` using the FV divB/gradient pair | Operator-split diffusion update; energy policy is reported in summaries | Diffuses divB | Simple local smoothing of grid-scale divergence | Explicit diffusion is time-step limited |
+| `elliptic_projection` | Periodic Poisson solve `lap(phi)=divB`, then `B <- B - grad(phi)` | Operator-split projection; energy policy and projection relaxation are reported | Projects B toward a discrete divergence-free field | Strongest direct divB reduction | Global solve; relaxed projection is not exact when `theta < 1` |
+| `powell_source` | `dU/dt = -(divB)[0,Bx,By,Bz,ux,uy,uz,u.B,0]^T` | Nonconservative source update | Transports divB errors with the flow rather than directly eliminating them | Can advect divergence out of local structures | Conservation drift and pressure robustness must be reported |
+| `eglm` / `mixed_eglm` | Extended GLM: mixed GLM plus `d(rho u)/dt=-(divB)B`, `dE/dt=-B.grad(psi)` | Operator-split, nonconservative extended-GLM source update | Transports/damps divB and applies EGLM source corrections | Formal GLM-family extension coupling divB to momentum/energy | Intended continuous EGLM convention needs author confirmation |
+| `gi_mixed_eglm` | GI-EGLM: mixed GLM plus `d(rho u)/dt=-(divB)B`, `dB/dt=-(divB)u`, `dE/dt=-(divB)(u.B)-B.grad(psi)`, `dpsi/dt=-u.grad(psi)` | Operator-split, nonconservative extended-GLM source update | Transports/damps divB and applies Galilean-invariant source corrections | Targets frame-invariant extended-GLM behavior | Frame invariance is not proven for the current split update |
+
+Cautionary / robustness-control variants:
+
+| Name | Method | Intended use |
+|---|---|---|
+| `powell_source_subcycled` | Powell source update with source-CFL subcycling | Robustness diagnostic for the explicit Powell source split |
+| `powell_source_limited` | Pressure-limited Powell source update | Positivity-limited nonconservative robustness policy; not exact Powell |
 
 ### Notes
 
-- `powell_source` is not a true cleaning method in the same sense as GLM or projection. It advects / controls divergence errors through non-conservative source terms.
-- `mixed_eglm` and `gi_mixed_eglm` should be treated as source-term variants and require diagnostics of conservation drift.
+- `eglm` is accepted as a CLI alias for the existing public method name `mixed_eglm`; generated output files still use `mixed_eglm` to avoid renaming existing artifacts.
+- `hyperbolic_glm`, `mixed_glm`, `mixed_eglm`, and `gi_mixed_eglm` are implemented as operator-split cleaning/source updates in the integrated runner. The scalar psi field is evolved for cleaning, but psi energy is not included in the conserved total energy.
+- `powell_source` uses nonconservative source terms. It transports divergence errors with the flow rather than eliminating them, so conservation drift and pressure robustness must be diagnosed separately from divB reduction.
+- `mixed_eglm` is treated here as a formal extended-GLM method. The implemented source terms are
+  `d(rho u)/dt = -(div B) B` and `dE/dt = -B . grad(psi)`, applied after the mixed-GLM B-psi update.
+- `gi_mixed_eglm` is treated here as a formal Galilean-invariant extended-GLM method. The implemented source terms are
+  `d(rho u)/dt = -(div B) B`, `dB/dt = -(div B) u`, `dE/dt = -(div B)(u.B) - B.grad(psi)`, and `dpsi/dt = -u.grad(psi)`, applied after the mixed-GLM update.
+- The EGLM/GI-EGLM source terms use the conserved-variable ordering `[rho, rho*ux, rho*uy, rho*uz, Bx, By, Bz, E, psi]`; the code updates the matching momentum, magnetic-field, energy, and psi slots consistently with that ordering.
+- Because GI-EGLM is applied as a split source using the pre-cleaning reference state, the desired Galilean-invariant continuous formulation needs author confirmation at the report level. The current implementation documents the intended source terms but does not prove exact frame invariance of the full operator-split hydro plus cleaning step.
 - The first-stage plugin interface currently has dedicated tests for the GLM flux wrapper, but the production runner is not yet fully plugin-driven.
 
 ---
@@ -152,7 +171,11 @@ Filename prefixes:
 | Field-loop advection | `mhd_fl` |
 | Divergence advection | `mhd_da` |
 
-Generated `results/` files are reproducibility artifacts. Do not commit regenerated CSVs unless they are intentionally curated for the final report.
+Generated `results/` files are reproducibility artifacts. Do not commit regenerated
+CSVs unless they are intentionally curated for the final report. Use finite-volume
+normalized divergence diagnostics (`L1_norm_fv`, `L2_norm_fv`, `Linf_norm_fv`) as
+the main comparison metrics. Centered-difference divB diagnostics are retained as
+secondary/internal checks for the standalone cleaning demos.
 
 ---
 

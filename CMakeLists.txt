@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenMP REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 include_directories(include)
 
@@ -143,8 +144,8 @@ target_link_libraries(mhd_runner
 )
 
 # ============================================================
-# Integrated HLLD + GLM runner test executable
-# (Orszag-Tang vortex and Brio-Wu shock tube with all cleaning methods)
+# Integrated HLLD + divergence-control runner test executable
+# (Orszag-Tang vortex, field-loop advection, and divergence advection)
 # ============================================================
 
 add_executable(test_mhd_runner
@@ -190,4 +191,43 @@ add_test(
 add_test(
     NAME mhd_runner
     COMMAND test_mhd_runner
+)
+
+add_test(
+    NAME mhd_runner_smoke_sanity_generate
+    COMMAND test_mhd_runner --smoke orszag_tang
+            none hyperbolic_glm mixed_glm parabolic elliptic_projection
+            powell_source eglm gi_mixed_eglm
+)
+
+add_test(
+    NAME mhd_runner_smoke_sanity_check
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/check_mhd_runner_sanity.py
+            --prefix mhd_ot_smoke
+)
+
+set_tests_properties(
+    mhd_runner_smoke_sanity_check
+    PROPERTIES DEPENDS mhd_runner_smoke_sanity_generate
+)
+
+add_test(
+    NAME mhd_runner_divergence_reduction_generate
+    COMMAND test_mhd_runner --smoke divergence_advection
+            none mixed_glm elliptic_projection
+)
+
+add_test(
+    NAME mhd_runner_divergence_reduction_check
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/check_mhd_runner_sanity.py
+            --prefix mhd_da_smoke
+            --methods none mixed_glm elliptic_projection
+            --check-reduction
+)
+
+set_tests_properties(
+    mhd_runner_divergence_reduction_check
+    PROPERTIES DEPENDS mhd_runner_divergence_reduction_generate
 )

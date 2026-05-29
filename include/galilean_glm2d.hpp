@@ -5,10 +5,12 @@
 #include "glm2d_types.hpp"
 #include "state.hpp"
 
-// Experimental Galilean-invariant mixed EGLM source terms for the standalone
-// 2D cleaning framework, corresponding to Dedner et al. Eq. (38).
+// Galilean-invariant mixed EGLM source terms for the 2D cleaning framework,
+// corresponding to the Galilean-invariant extended-GLM source formulation.
 //
-// This is non-conservative and distinct from the existing MIXED_EGLM source.
+// This is non-conservative and distinct from MIXED_EGLM because it also applies
+// the magnetic-field and psi advection corrections needed by the intended
+// Galilean-invariant EGLM formulation.
 //
 // Source terms:
 //

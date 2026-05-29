@@ -23,6 +23,8 @@ METHODS_MAIN = [
     "parabolic",
     "elliptic_projection",
     "powell_source",
+    "powell_source_subcycled",
+    "powell_source_limited",
 ]
 
 METHODS_READY = [
@@ -38,6 +40,8 @@ METHOD_LABELS = {
     "parabolic": "Parabolic",
     "elliptic_projection": "Projection",
     "powell_source": "Powell",
+    "powell_source_subcycled": "Powell subcycled",
+    "powell_source_limited": "Powell limited",
 }
 
 COLORS = {
@@ -47,6 +51,8 @@ COLORS = {
     "parabolic": "tab:green",
     "elliptic_projection": "tab:red",
     "powell_source": "tab:purple",
+    "powell_source_subcycled": "tab:brown",
+    "powell_source_limited": "tab:cyan",
 }
 
 LINESTYLES = {
@@ -56,6 +62,8 @@ LINESTYLES = {
     "parabolic": "--",
     "elliptic_projection": "--",
     "powell_source": ":",
+    "powell_source_subcycled": "-.",
+    "powell_source_limited": "--",
 }
 
 
@@ -154,7 +162,13 @@ def final_value(df, candidates):
 
 
 def plot_ot_pressure_failure_stages():
-    methods = ["parabolic", "elliptic_projection", "powell_source"]
+    methods = [
+        "parabolic",
+        "elliptic_projection",
+        "powell_source",
+        "powell_source_subcycled",
+        "powell_source_limited",
+    ]
     stage_cols = [
         ("before_hydro", ["min_pressure_before_hydro"]),
         ("after_hydro", ["min_pressure_after_hydro"]),

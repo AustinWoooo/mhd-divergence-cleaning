@@ -106,6 +106,7 @@ CleaningType parse_cleaning_type_2d(const std::string& name) {
     if (name == "powell_source") return CleaningType::POWELL_SOURCE;
     if (name == "powell_source_subcycled") return CleaningType::POWELL_SOURCE_SUBCYCLED;
     if (name == "powell_source_limited") return CleaningType::POWELL_SOURCE_LIMITED;
+    if (name == "eglm") return CleaningType::MIXED_EGLM;
     if (name == "mixed_eglm") return CleaningType::MIXED_EGLM;
     if (name == "gi_mixed_eglm") return CleaningType::GI_MIXED_EGLM;
 

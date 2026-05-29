@@ -17,11 +17,11 @@ def pick_time_column(df):
 
 def pick_metric_column(df, metric):
     candidates = [
-        metric,
-        f"{metric}_fv",
-        f"{metric}_centered",
         f"{metric}_norm_fv",
+        f"{metric}_fv",
+        metric,
         f"{metric}_norm_centered",
+        f"{metric}_centered",
         f"{metric}_divB",
         f"{metric}_divb",
     ]

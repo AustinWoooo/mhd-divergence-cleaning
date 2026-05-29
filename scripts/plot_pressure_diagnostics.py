@@ -40,8 +40,8 @@ METHOD_LABELS = {
     "parabolic": "Parabolic",
     "elliptic_projection": "Projection",
     "powell_source": "Powell",
-    "powell_source_subcycled": "Powell subcycled",
-    "powell_source_limited": "Powell limited",
+    "powell_source_subcycled": "Powell subcycled control",
+    "powell_source_limited": "Pressure-limited Powell",
 }
 
 COLORS = {

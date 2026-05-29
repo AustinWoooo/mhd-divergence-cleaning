@@ -18,7 +18,7 @@
 //  Cleaning type names (lowercase):
 //    none, parabolic, hyperbolic_glm, mixed_glm, elliptic_projection,
 //    powell_source, powell_source_subcycled, powell_source_limited,
-//    mixed_eglm, gi_mixed_eglm
+//    eglm (alias for mixed_eglm), mixed_eglm, gi_mixed_eglm
 // =============================================================================
 
 #include <algorithm>
@@ -75,7 +75,7 @@ void print_usage(const char* prog) {
         << "  cleaning  : none | parabolic | hyperbolic_glm | mixed_glm\n"
         << "              elliptic_projection | powell_source\n"
         << "              powell_source_subcycled | powell_source_limited\n"
-        << "              mixed_eglm | gi_mixed_eglm  (default: all)\n"
+        << "              eglm | mixed_eglm | gi_mixed_eglm  (default: all)\n"
         << "\n"
         << "Examples:\n"
         << "  " << prog << "\n"

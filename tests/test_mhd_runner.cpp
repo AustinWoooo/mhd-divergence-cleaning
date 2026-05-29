@@ -17,7 +17,8 @@
 //
 //  Cleaning type names (lowercase):
 //    none, parabolic, hyperbolic_glm, mixed_glm, elliptic_projection,
-//    powell_source, mixed_eglm, gi_mixed_eglm
+//    powell_source, powell_source_subcycled, powell_source_limited,
+//    mixed_eglm, gi_mixed_eglm
 // =============================================================================
 
 #include <algorithm>
@@ -41,6 +42,7 @@ const std::vector<CleaningType> ALL_CASES = {
     CleaningType::ELLIPTIC_PROJECTION,
     CleaningType::POWELL_SOURCE,
     CleaningType::POWELL_SOURCE_SUBCYCLED,
+    CleaningType::POWELL_SOURCE_LIMITED,
     CleaningType::MIXED_EGLM,
     CleaningType::GI_MIXED_EGLM
 };
@@ -62,7 +64,7 @@ void print_usage(const char* prog) {
         << "              divergence_advection  (default: orszag_tang)\n"
         << "  cleaning  : none | parabolic | hyperbolic_glm | mixed_glm\n"
         << "              elliptic_projection | powell_source\n"
-        << "              powell_source_subcycled\n"
+        << "              powell_source_subcycled | powell_source_limited\n"
         << "              mixed_eglm | gi_mixed_eglm  (default: all)\n"
         << "\n"
         << "Examples:\n"

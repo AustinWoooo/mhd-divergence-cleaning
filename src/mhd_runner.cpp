@@ -27,7 +27,7 @@
 #include "glm.hpp"
 #include "glm2d.hpp"
 #include "glm2d_common.hpp"
-#include "powell2d.hpp"
+#include "powell_control.hpp"
 #include "projection2d.hpp"
 
 namespace fs = std::filesystem;
@@ -54,6 +54,8 @@ inline State prim_to_state(const PrimState& W, double gamma) {
 // failure.  Do NOT claim exact projection when theta < 1.
 constexpr double MIN_PROJECTION_THETA = 1.0 / 64.0;
 constexpr double POWELL_SOURCE_CFL = 0.02;
+constexpr double POWELL_LIMITED_PRESSURE_FLOOR = 1.0e-12;
+constexpr double POWELL_LIMITED_DENSITY_FLOOR = TINY_NUMBER;
 
 // -----------------------------------------------------------------------------
 //  Stage-level positivity diagnostics (Task A)
@@ -129,6 +131,10 @@ struct CleaningAdvanceStats {
     double projection_theta = 1.0;
     // Task A: per-stage minimums recorded during the cleaning substep.
     StagePressureMins stage_mins;
+    long long powell_limited_cells = 0;
+    double powell_limited_theta_min = 1.0;
+    double powell_limited_theta_sum = 0.0;
+    long long powell_limited_activations = 0;
 };
 
 std::string cleaning_energy_policy_name(CleaningEnergyPolicy policy) {
@@ -267,6 +273,60 @@ BadStateRecord scan_physical_state(
                 out.kinetic_energy = ke;
                 out.magnetic_energy = me;
                 out.internal_energy = internal;
+                out.Bx = cell[BX];
+                out.By = cell[BY];
+                out.Bz = cell[BZ];
+                out.psi = cell[PSI];
+                out.divB = compute_fv_divB_cell_2d(U, nx, ny, i, j, dx, dy);
+                return out;
+            }
+        }
+    }
+
+    return out;
+}
+
+BadStateRecord scan_raw_primitive_state(
+    const std::vector<State>& U,
+    int nx,
+    int ny,
+    double dx,
+    double dy,
+    double gamma,
+    const std::string& stage
+) {
+    BadStateRecord out;
+    out.stage = stage;
+
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            const int id = idx2d(i, j, nx);
+            const State& cell = U[id];
+            const PrimState W = state_to_prim(cell, gamma);
+
+            std::string reason;
+            if (!std::isfinite(W.rho) || !std::isfinite(W.p)) {
+                reason = "nonfinite_state";
+            } else if (W.rho <= 0.0) {
+                reason = "non_positive_density";
+            } else if (W.p <= 0.0) {
+                reason = "non_positive_pressure";
+            }
+
+            if (!reason.empty()) {
+                const double ke = kinetic_energy_density(cell);
+                const double me = magnetic_energy_density(cell);
+                out.found = true;
+                out.stage = stage;
+                out.reason = reason;
+                out.i = i;
+                out.j = j;
+                out.rho = W.rho;
+                out.pressure = W.p;
+                out.total_energy = cell[E];
+                out.kinetic_energy = ke;
+                out.magnetic_energy = me;
+                out.internal_energy = W.p / (gamma - 1.0);
                 out.Bx = cell[BX];
                 out.By = cell[BY];
                 out.Bz = cell[BZ];
@@ -449,6 +509,158 @@ void write_powell_first_bad_cell_diagnostic(
         << u_dot_B_before << "\n";
 }
 
+std::string powell_limited_limiter_stats_filename(
+    const MHDRunParams& params,
+    const std::string& method_name
+) {
+    return "results/mhd_runner/failures/"
+      + params.glm.out_prefix
+      + "_"
+      + method_name
+      + "_limiter_stats.csv";
+}
+
+void initialize_powell_limited_limiter_stats_csv(
+    const MHDRunParams& params,
+    const std::string& method_name
+) {
+    const std::string filename =
+        powell_limited_limiter_stats_filename(params, method_name);
+    ensure_parent_directory(filename);
+
+    std::ofstream out(filename);
+    if (!out) {
+        throw std::runtime_error(
+            "Failed to open Powell limiter stats file: " + filename
+        );
+    }
+
+    out << "step,time,dt,limited_cells,theta_min,theta_mean,"
+        << "min_pressure_before_source,min_pressure_after_source,"
+        << "max_abs_divB\n";
+}
+
+void append_powell_limited_limiter_stats_row(
+    const MHDRunParams& params,
+    const std::string& method_name,
+    int step,
+    double time,
+    double dt,
+    long long limited_cells,
+    double theta_min,
+    double theta_mean,
+    double min_pressure_before_source,
+    double min_pressure_after_source,
+    double max_abs_divB
+) {
+    const std::string filename =
+        powell_limited_limiter_stats_filename(params, method_name);
+
+    std::ofstream out(filename, std::ios::app);
+    if (!out) {
+        throw std::runtime_error(
+            "Failed to append Powell limiter stats file: " + filename
+        );
+    }
+
+    out << step << ","
+        << time << ","
+        << dt << ","
+        << limited_cells << ","
+        << theta_min << ","
+        << theta_mean << ","
+        << min_pressure_before_source << ","
+        << min_pressure_after_source << ","
+        << max_abs_divB << "\n";
+}
+
+void write_powell_limited_first_limited_cell_diagnostic(
+    const MHDRunParams& params,
+    const std::string& method_name,
+    int step,
+    double time,
+    double dt,
+    int i,
+    int j,
+    const State& before,
+    const State& after,
+    const State& full_delta,
+    double divB,
+    double theta
+) {
+    const std::string filename =
+        "results/mhd_runner/failures/"
+      + params.glm.out_prefix
+      + "_"
+      + method_name
+      + "_first_limited_cell.csv";
+
+    ensure_parent_directory(filename);
+
+    std::ofstream out(filename);
+    if (!out) {
+        throw std::runtime_error(
+            "Failed to open Powell limited-cell diagnostic file: " + filename
+        );
+    }
+
+    const CellThermo b = decompose_cell(before, params.gamma);
+    const CellThermo a = decompose_cell(after, params.gamma);
+    const double u_dot_B_before =
+        b.vx * before[BX] + b.vy * before[BY] + b.vz * before[BZ];
+
+    out << "step,time,dt,i,j,"
+        << "rho_before,rho_after,"
+        << "vx_before,vy_before,vz_before,"
+        << "vx_after,vy_after,vz_after,"
+        << "Bx_before,By_before,Bz_before,"
+        << "Bx_after,By_after,Bz_after,"
+        << "E_before,E_after,"
+        << "kinetic_before,kinetic_after,"
+        << "magnetic_before,magnetic_after,"
+        << "thermal_before,thermal_after,"
+        << "p_before,p_after,"
+        << "divB,"
+        << "theta,"
+        << "delta_mx_full,delta_my_full,delta_mz_full,"
+        << "delta_Bx_full,delta_By_full,delta_Bz_full,"
+        << "delta_E_full,"
+        << "delta_mx_applied,delta_my_applied,delta_mz_applied,"
+        << "delta_Bx_applied,delta_By_applied,delta_Bz_applied,"
+        << "delta_E_applied,"
+        << "u_dot_B_before\n";
+
+    out << step << "," << time << "," << dt << ","
+        << i << "," << j << ","
+        << before[RHO] << "," << after[RHO] << ","
+        << b.vx << "," << b.vy << "," << b.vz << ","
+        << a.vx << "," << a.vy << "," << a.vz << ","
+        << before[BX] << "," << before[BY] << "," << before[BZ] << ","
+        << after[BX] << "," << after[BY] << "," << after[BZ] << ","
+        << before[E] << "," << after[E] << ","
+        << b.kinetic << "," << a.kinetic << ","
+        << b.magnetic << "," << a.magnetic << ","
+        << b.thermal << "," << a.thermal << ","
+        << b.pressure << "," << a.pressure << ","
+        << divB << ","
+        << theta << ","
+        << full_delta[MX] << ","
+        << full_delta[MY] << ","
+        << full_delta[MZ] << ","
+        << full_delta[BX] << ","
+        << full_delta[BY] << ","
+        << full_delta[BZ] << ","
+        << full_delta[E] << ","
+        << after[MX] - before[MX] << ","
+        << after[MY] - before[MY] << ","
+        << after[MZ] - before[MZ] << ","
+        << after[BX] - before[BX] << ","
+        << after[BY] - before[BY] << ","
+        << after[BZ] - before[BZ] << ","
+        << after[E] - before[E] << ","
+        << u_dot_B_before << "\n";
+}
+
 MHDRunDiagnostics compute_mhd_run_diagnostics(
     const std::vector<State>& U,
     double gamma,
@@ -614,28 +826,42 @@ ProjectionResult apply_cleaning_update_for_runner(
     return {};
 }
 
-int powell_source_subcycle_count(
-    const std::vector<State>& U,
-    const GLM2DParams& params,
-    double dt
-) {
-    const std::vector<double> divB =
-        compute_fv_divB_field_2d(U, params.nx, params.ny, params.dx, params.dy);
-
-    double max_s = 0.0;
-    for (double d : divB) {
-        if (std::isfinite(d)) {
-            max_s = std::max(max_s, std::abs(dt * d));
-        }
-    }
-
-    return std::max(
-        1,
-        static_cast<int>(std::ceil(max_s / POWELL_SOURCE_CFL))
-    );
+BadStateRecord to_bad_state_record(const PowellControlBadState& bad) {
+    BadStateRecord out;
+    out.found = bad.found;
+    out.stage = bad.stage;
+    out.reason = bad.reason;
+    out.i = bad.i;
+    out.j = bad.j;
+    out.rho = bad.rho;
+    out.pressure = bad.pressure;
+    out.total_energy = bad.total_energy;
+    out.kinetic_energy = bad.kinetic_energy;
+    out.magnetic_energy = bad.magnetic_energy;
+    out.internal_energy = bad.internal_energy;
+    out.Bx = bad.Bx;
+    out.By = bad.By;
+    out.Bz = bad.Bz;
+    out.psi = bad.psi;
+    out.divB = bad.divB;
+    return out;
 }
 
-CleaningAdvanceStats apply_powell_source_subcycled_for_runner(
+void copy_powell_control_stage_mins(
+    CleaningAdvanceStats& stats,
+    const PowellControlResult& result
+) {
+    stats.stage_mins.min_pressure_after_cleaning_B =
+        result.min_pressure_after_source;
+    stats.stage_mins.min_density_after_cleaning_B =
+        result.min_density_after_source;
+    stats.stage_mins.min_pressure_after_energy_repair =
+        result.min_pressure_after_source;
+    stats.stage_mins.min_density_after_energy_repair =
+        result.min_density_after_source;
+}
+
+CleaningAdvanceStats apply_powell_subcycled_for_runner(
     std::vector<State>& U,
     GLM2DParams params,
     const MHDRunParams& run_params,
@@ -646,76 +872,116 @@ CleaningAdvanceStats apply_powell_source_subcycled_for_runner(
     double gamma
 ) {
     CleaningAdvanceStats stats;
-    const int nsub = powell_source_subcycle_count(U, params, dt_mhd);
-    stats.subcycles = nsub;
+    const PowellControlResult result =
+        apply_powell_subcycled_2d(
+            U,
+            params,
+            dt_mhd,
+            gamma,
+            POWELL_SOURCE_CFL,
+            time
+        );
 
-    const double dt_sub = dt_mhd / static_cast<double>(nsub);
-    for (int sub = 0; sub < nsub; ++sub) {
-        params.dt = dt_sub;
-        const std::vector<State> Ubefore = U;
+    stats.subcycles = result.subcycles;
+    copy_powell_control_stage_mins(stats, result);
 
-        apply_powell_source_2d(U, params);
+    if (result.first_bad_cell.found) {
+        write_powell_first_bad_cell_diagnostic(
+            run_params,
+            method_name,
+            step + 1,
+            result.first_bad_cell.time,
+            result.first_bad_cell.dt,
+            result.first_bad_cell.i,
+            result.first_bad_cell.j,
+            result.first_bad_cell.before,
+            result.first_bad_cell.after,
+            result.first_bad_cell.divB
+        );
+    }
 
-        {
-            const MinPhysical mp = compute_min_physical(U, gamma);
-            stats.stage_mins.min_pressure_after_cleaning_B =
-                std::min(stats.stage_mins.min_pressure_after_cleaning_B,
-                         mp.min_pressure);
-            stats.stage_mins.min_density_after_cleaning_B =
-                std::min(stats.stage_mins.min_density_after_cleaning_B,
-                         mp.min_density);
-            stats.stage_mins.min_pressure_after_energy_repair =
-                std::min(stats.stage_mins.min_pressure_after_energy_repair,
-                         mp.min_pressure);
-            stats.stage_mins.min_density_after_energy_repair =
-                std::min(stats.stage_mins.min_density_after_energy_repair,
-                         mp.min_density);
-        }
+    if (result.bad_state.found) {
+        stats.bad_state = to_bad_state_record(result.bad_state);
+        stats.failure_time = result.failure_time;
+        stats.stage_mins.failure_stage = result.failure_stage;
+    }
 
-        const BadStateRecord bad =
-            scan_physical_state(
-                U,
-                params.nx,
-                params.ny,
-                params.dx,
-                params.dy,
-                gamma,
-                "after_powell_subcycle_update"
-            );
+    return stats;
+}
 
-        if (bad.found) {
-            if (bad.reason == "non_positive_pressure") {
-                const int id = idx2d(bad.i, bad.j, params.nx);
-                const double divB_before =
-                    compute_fv_divB_cell_2d(
-                        Ubefore,
-                        params.nx,
-                        params.ny,
-                        bad.i,
-                        bad.j,
-                        params.dx,
-                        params.dy
-                    );
-                write_powell_first_bad_cell_diagnostic(
-                    run_params,
-                    method_name,
-                    step + 1,
-                    time + dt_sub * static_cast<double>(sub + 1),
-                    dt_sub,
-                    bad.i,
-                    bad.j,
-                    Ubefore[id],
-                    U[id],
-                    divB_before
-                );
-            }
+CleaningAdvanceStats apply_powell_limited_for_runner(
+    std::vector<State>& U,
+    const GLM2DParams& params,
+    const MHDRunParams& run_params,
+    const std::string& method_name,
+    int step,
+    double time,
+    double dt_mhd,
+    double gamma,
+    bool& wrote_first_limited_cell
+) {
+    CleaningAdvanceStats stats;
+    const PowellControlResult result =
+        apply_powell_limited_2d(
+            U,
+            params,
+            dt_mhd,
+            gamma,
+            POWELL_LIMITED_PRESSURE_FLOOR,
+            POWELL_LIMITED_DENSITY_FLOOR,
+            time,
+            !wrote_first_limited_cell
+        );
 
-            stats.bad_state = bad;
-            stats.failure_time =
-                time + dt_sub * static_cast<double>(sub + 1);
-            stats.stage_mins.failure_stage = "after_powell_subcycle_update";
-            return stats;
-        }
+    stats.subcycles = result.subcycles;
+    copy_powell_control_stage_mins(stats, result);
+    stats.powell_limited_cells = result.total_limited_cells;
+    stats.powell_limited_theta_min = result.theta_min;
+    stats.powell_limited_theta_sum = result.theta_sum_limited;
+    stats.powell_limited_activations = result.limiter_activations;
+
+    const double theta_mean =
+        (result.total_limited_cells > 0)
+        ? result.theta_sum_limited
+            / static_cast<double>(result.total_limited_cells)
+        : 1.0;
+
+    append_powell_limited_limiter_stats_row(
+        run_params,
+        method_name,
+        step + 1,
+        time + dt_mhd,
+        dt_mhd,
+        result.total_limited_cells,
+        result.theta_min,
+        theta_mean,
+        result.min_pressure_before_source,
+        result.min_pressure_after_source,
+        result.max_abs_divB
+    );
+
+    if (result.first_limited_cell.found) {
+        write_powell_limited_first_limited_cell_diagnostic(
+            run_params,
+            method_name,
+            step + 1,
+            result.first_limited_cell.time,
+            result.first_limited_cell.dt,
+            result.first_limited_cell.i,
+            result.first_limited_cell.j,
+            result.first_limited_cell.before,
+            result.first_limited_cell.after,
+            result.first_limited_cell.full_delta,
+            result.first_limited_cell.divB,
+            result.first_limited_cell.theta
+        );
+        wrote_first_limited_cell = true;
+    }
+
+    if (result.bad_state.found) {
+        stats.bad_state = to_bad_state_record(result.bad_state);
+        stats.failure_time = result.failure_time;
+        stats.stage_mins.failure_stage = result.failure_stage;
     }
 
     return stats;
@@ -731,7 +997,8 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
     double time,
     double dt_mhd,
     double gamma,
-    bool print_parabolic_subcycling
+    bool print_parabolic_subcycling,
+    bool& wrote_first_limited_cell
 ) {
     CleaningAdvanceStats stats;
 
@@ -740,7 +1007,7 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
     }
 
     if (type == CleaningType::POWELL_SOURCE_SUBCYCLED) {
-        return apply_powell_source_subcycled_for_runner(
+        return apply_powell_subcycled_for_runner(
             U,
             params,
             run_params,
@@ -749,6 +1016,20 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
             time,
             dt_mhd,
             gamma
+        );
+    }
+
+    if (type == CleaningType::POWELL_SOURCE_LIMITED) {
+        return apply_powell_limited_for_runner(
+            U,
+            params,
+            run_params,
+            method_name,
+            step,
+            time,
+            dt_mhd,
+            gamma,
+            wrote_first_limited_cell
         );
     }
 
@@ -1455,7 +1736,12 @@ void write_mhd_run_summary(
     const StagePressureMins& stage_mins,
     double projection_theta,
     int retry_count,
-    double min_dt_used
+    double min_dt_used,
+    long long powell_limited_total_cells,
+    int powell_limited_max_cells_per_step,
+    double powell_limited_theta_min_global,
+    double powell_limited_theta_mean,
+    long long powell_limited_total_activations
 ) {
     const std::string filename =
         "results/mhd_runner/summaries/"
@@ -1491,7 +1777,12 @@ void write_mhd_run_summary(
         << "min_pressure_before_hydro,min_pressure_after_hydro,"
         << "min_pressure_after_cleaning_B,min_pressure_after_energy_repair,"
         << "min_pressure_after_full_step,"
-        << "projection_theta,retry_count,min_dt_used\n";
+        << "projection_theta,retry_count,min_dt_used,"
+        << "powell_limited_total_cells,"
+        << "powell_limited_max_cells_per_step,"
+        << "powell_limited_theta_min_global,"
+        << "powell_limited_theta_mean,"
+        << "powell_limited_total_activations\n";
 
     const std::string fs_name =
         stage_mins.failure_stage.empty()
@@ -1533,6 +1824,12 @@ void write_mhd_run_summary(
         << "," << retry_count
         << ",";
     write_optional_double(out, min_dt_used);
+    out << ","
+        << powell_limited_total_cells << ","
+        << powell_limited_max_cells_per_step << ","
+        << powell_limited_theta_min_global << ","
+        << powell_limited_theta_mean << ","
+        << powell_limited_total_activations;
     out << "\n";
 }
 
@@ -1769,6 +2066,10 @@ void run_mhd_2d_case(
          << "projection_true_residual,"
          << "projection_converged\n";
 
+    if (type == CleaningType::POWELL_SOURCE_LIMITED) {
+        initialize_powell_limited_limiter_stats_csv(params, name);
+    }
+
     double t    = 0.0;
     int    step = 0;
     bool stopped_for_failure = false;
@@ -1793,6 +2094,12 @@ void run_mhd_2d_case(
     double run_projection_theta = 1.0;
     int    run_total_retries   = 0;
     double run_min_dt_used     = std::numeric_limits<double>::infinity();
+    long long powell_limited_total_cells = 0;
+    int powell_limited_max_cells_per_step = 0;
+    double powell_limited_theta_min_global = 1.0;
+    double powell_limited_theta_sum = 0.0;
+    long long powell_limited_total_activations = 0;
+    bool wrote_first_limited_cell = false;
 
     while (true) {
         const LocalDivBNorms norms =
@@ -1824,6 +2131,50 @@ void run_mhd_2d_case(
                 failure_reason = "negative_density";
             } else if (run_diag.has_negative_pressure) {
                 failure_reason = "negative_pressure";
+            }
+            const MinPhysical mp = compute_min_physical(U, gamma);
+            run_stage_mins.min_pressure_after_full_step = std::min(
+                run_stage_mins.min_pressure_after_full_step,
+                mp.min_pressure
+            );
+            run_stage_mins.min_density_after_full_step = std::min(
+                run_stage_mins.min_density_after_full_step,
+                mp.min_density
+            );
+            run_stage_mins.failure_stage = "step_start_diagnostic";
+            BadStateRecord top_bad =
+                scan_physical_state(
+                    U,
+                    nx,
+                    ny,
+                    dx,
+                    dy,
+                    gamma,
+                    "step_start_diagnostic"
+                );
+            if (!top_bad.found) {
+                top_bad = scan_raw_primitive_state(
+                    U,
+                    nx,
+                    ny,
+                    dx,
+                    dy,
+                    gamma,
+                    "step_start_diagnostic"
+                );
+            }
+            if (top_bad.found) {
+                write_cleaning_failure_csv(
+                    params,
+                    name,
+                    step,
+                    failure_time,
+                    top_bad,
+                    run_stage_mins,
+                    run_projection_theta,
+                    run_total_retries,
+                    run_min_dt_used
+                );
             }
             print_mhd_run_failure_warning(
                 params,
@@ -1928,7 +2279,8 @@ void run_mhd_2d_case(
                     dt,
                     gamma,
                     type == CleaningType::PARABOLIC &&
-                        !printed_parabolic_subcycling
+                        !printed_parabolic_subcycling,
+                    wrote_first_limited_cell
                 );
 
             if (cleaning_stats.bad_state.found && total_retries < max_retries) {
@@ -1988,6 +2340,18 @@ void run_mhd_2d_case(
         if (cleaning_stats.projection_theta < run_projection_theta) {
             run_projection_theta = cleaning_stats.projection_theta;
         }
+        powell_limited_total_cells += cleaning_stats.powell_limited_cells;
+        powell_limited_max_cells_per_step = std::max(
+            powell_limited_max_cells_per_step,
+            static_cast<int>(cleaning_stats.powell_limited_cells)
+        );
+        powell_limited_theta_min_global = std::min(
+            powell_limited_theta_min_global,
+            cleaning_stats.powell_limited_theta_min
+        );
+        powell_limited_theta_sum += cleaning_stats.powell_limited_theta_sum;
+        powell_limited_total_activations +=
+            cleaning_stats.powell_limited_activations;
 
         const double next_t = t + dt;
         const int next_step = step + 1;
@@ -2201,7 +2565,15 @@ void run_mhd_2d_case(
         run_stage_mins,
         run_projection_theta,
         run_total_retries,
-        run_min_dt_used
+        run_min_dt_used,
+        powell_limited_total_cells,
+        powell_limited_max_cells_per_step,
+        powell_limited_theta_min_global,
+        (powell_limited_total_cells > 0)
+            ? powell_limited_theta_sum
+                / static_cast<double>(powell_limited_total_cells)
+            : 1.0,
+        powell_limited_total_activations
     );
 
     std::cout << "  Wrote " << diag_name << "\n";

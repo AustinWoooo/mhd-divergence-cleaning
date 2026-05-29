@@ -130,6 +130,12 @@ METHODS = {
         "ls": "-.",
         "primary": False,
     },
+    "powell_source_limited": {
+        "label": "Powell limited",
+        "color": "#17becf",
+        "ls": "--",
+        "primary": False,
+    },
 }
 
 # Set to True if you want parabolic/projection/Powell included in the new
@@ -144,6 +150,7 @@ CLEANING_TYPES = [
     "elliptic_projection",
     "powell_source",
     "powell_source_subcycled",
+    "powell_source_limited",
     "mixed_eglm",
     "gi_mixed_eglm",
 ]

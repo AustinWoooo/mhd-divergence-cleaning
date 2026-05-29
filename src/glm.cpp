@@ -63,6 +63,8 @@ std::string cleaning_name(CleaningType type) {
             return "powell_source";
         case CleaningType::POWELL_SOURCE_SUBCYCLED:
             return "powell_source_subcycled";
+        case CleaningType::POWELL_SOURCE_LIMITED:
+            return "powell_source_limited";
         case CleaningType::MIXED_EGLM:
             return "mixed_eglm";
         case CleaningType::GI_MIXED_EGLM:

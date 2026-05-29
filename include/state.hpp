@@ -33,6 +33,9 @@ enum class CleaningType {
     // Same Powell source formula, source-subcycled to limit |dt * divB|.
     // Non-conservative; keeps the original POWELL_SOURCE behavior unchanged.
     POWELL_SOURCE_SUBCYCLED,
+    // Pressure-limited Powell source. Experimental positivity policy that
+    // limits the non-conservative source increment instead of flooring pressure.
+    POWELL_SOURCE_LIMITED,
     // Mixed GLM plus EGLM momentum/energy source terms.
     // Non-conservative; distinct from Powell 8-wave source.
     MIXED_EGLM,

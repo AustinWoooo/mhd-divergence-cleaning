@@ -5,6 +5,42 @@
 
 #include "glm2d_common.hpp"
 
+State compute_powell_source_increment_cell(
+    const State& cell,
+    double divB,
+    double dt
+) {
+    const double rho = cell[RHO];
+
+    if (rho <= TINY_NUMBER) {
+        throw std::runtime_error(
+            "compute_powell_source_increment_cell: non-positive density encountered"
+        );
+    }
+
+    const double ux = cell[MX] / rho;
+    const double uy = cell[MY] / rho;
+    const double uz = cell[MZ] / rho;
+
+    const double Bx = cell[BX];
+    const double By = cell[BY];
+    const double Bz = cell[BZ];
+
+    const double u_dot_B = ux * Bx + uy * By + uz * Bz;
+    const double s = -dt * divB;
+
+    State dU{};
+    dU.fill(0.0);
+    dU[MX] = s * Bx;
+    dU[MY] = s * By;
+    dU[MZ] = s * Bz;
+    dU[BX] = s * ux;
+    dU[BY] = s * uy;
+    dU[BZ] = s * uz;
+    dU[E]  = s * u_dot_B;
+    return dU;
+}
+
 void apply_powell_source_2d(
     std::vector<State>& U,
     const GLM2DParams& params
@@ -40,45 +76,27 @@ void apply_powell_source_2d(
             const int id = idx2d(i, j, nx);
 
             State cell = Uold[id];
-
-            const double rho = cell[RHO];
-
-            if (rho <= TINY_NUMBER) {
-                throw std::runtime_error(
-                    "apply_powell_source_2d: non-positive density encountered"
-                );
-            }
-
-            const double ux = cell[MX] / rho;
-            const double uy = cell[MY] / rho;
-            const double uz = cell[MZ] / rho;
-
-            const double Bx = cell[BX];
-            const double By = cell[BY];
-            const double Bz = cell[BZ];
-
-            const double u_dot_B = ux * Bx + uy * By + uz * Bz;
-
-            const double s = -dt * divB[id];
+            const State dU =
+                compute_powell_source_increment_cell(cell, divB[id], dt);
 
             // Momentum source:
             //
             //   d(rho*u)/dt = -(divB) B
-            cell[MX] += s * Bx;
-            cell[MY] += s * By;
-            cell[MZ] += s * Bz;
+            cell[MX] += dU[MX];
+            cell[MY] += dU[MY];
+            cell[MZ] += dU[MZ];
 
             // Magnetic-field source:
             //
             //   dB/dt = -(divB) u
-            cell[BX] += s * ux;
-            cell[BY] += s * uy;
-            cell[BZ] += s * uz;
+            cell[BX] += dU[BX];
+            cell[BY] += dU[BY];
+            cell[BZ] += dU[BZ];
 
             // Energy source:
             //
             //   dE/dt = -(divB) (u.B)
-            cell[E] += s * u_dot_B;
+            cell[E] += dU[E];
 
             // GLM scalar is not part of Powell source.
             // cell[PSI] unchanged.

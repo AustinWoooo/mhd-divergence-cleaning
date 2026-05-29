@@ -20,6 +20,16 @@ Makefile
 __pycache__/
 *.pyc
 
+# Generated sweep/smoke outputs from running executables at the repo root.
+# Existing tracked curated CSVs remain tracked; these rules only prevent new
+# transient outputs from appearing as untracked files.
+results/mhd_sweep_mpi/
+results/mhd_runner/*/*_smoke_*.csv
+results/mhd_runner/*/mpi_*.csv
+results/mhd_runner/*/mpi_smoke_*.csv
+results/mhd_runner/*/mpi_ot_full_*.csv
+results/mhd_runner/*/mpi_otfull_*.csv
+
 # Editor files
 .vscode/
 .idea/

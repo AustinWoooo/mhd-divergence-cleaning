@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(OpenMP REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+option(ENABLE_MPI "Build optional coarse-grained MPI sweep runner" OFF)
+
 include_directories(include)
 
 # ============================================================
@@ -157,6 +159,20 @@ target_link_libraries(test_mhd_runner
         mhd_runner
 )
 
+if(ENABLE_MPI)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+
+    add_executable(mhd_sweep_mpi
+        src/mhd_sweep_mpi.cpp
+    )
+
+    target_link_libraries(mhd_sweep_mpi
+        PRIVATE
+            mhd_runner
+            MPI::MPI_CXX
+    )
+endif()
+
 # ============================================================
 # CTest registration
 # ============================================================
@@ -231,3 +247,27 @@ set_tests_properties(
     mhd_runner_divergence_reduction_check
     PROPERTIES DEPENDS mhd_runner_divergence_reduction_generate
 )
+
+if(ENABLE_MPI)
+    add_test(
+        NAME mhd_sweep_mpi_smoke_generate
+        COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                ${MPIEXEC_PREFLAGS}
+                $<TARGET_FILE:mhd_sweep_mpi>
+                ${MPIEXEC_POSTFLAGS}
+                --smoke
+    )
+
+    add_test(
+        NAME mhd_sweep_mpi_smoke_check
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_mpi_sweep_summary.py
+                --summary-dir results/mhd_sweep_mpi/summaries
+                --min-rows 8
+    )
+
+    set_tests_properties(
+        mhd_sweep_mpi_smoke_check
+        PROPERTIES DEPENDS mhd_sweep_mpi_smoke_generate
+    )
+endif()

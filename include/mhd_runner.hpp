@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "glm2d_types.hpp"
+#include "mhd_reconstruction.hpp"
 #include "state.hpp"
 
 struct MHDRunParams {
@@ -31,6 +32,12 @@ struct MHDRunParams {
     // Problem selector: "orszag_tang", "field_loop",
     // or "divergence_advection".
     std::string problem = "orszag_tang";
+
+    // High-resolution shock-capturing controls for the HLLD finite-volume update.
+    // PLM + MC gives a second-order MUSCL-HLLD scheme by default; PCM falls back
+    // to first-order Godunov for comparison/debugging.
+    MHD::Reconstruction reconstruction = MHD::Reconstruction::PLM;
+    MHD::SlopeLimiter   limiter        = MHD::SlopeLimiter::MC;
 };
 
 void initialize_orszag_tang_2d(

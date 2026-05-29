@@ -27,6 +27,19 @@ target_link_libraries(test_hlld_primitive_recovery
 )
 
 # ============================================================
+# Reconstruction (HRSC MUSCL limiter) unit test
+# ============================================================
+
+add_executable(test_mhd_reconstruction
+    tests/test_mhd_reconstruction.cpp
+)
+
+target_link_libraries(test_mhd_reconstruction
+    PRIVATE
+        hlld
+)
+
+# ============================================================
 # 1D GLM core library
 # ============================================================
 
@@ -152,6 +165,11 @@ enable_testing()
 add_test(
     NAME hlld_primitive_recovery
     COMMAND test_hlld_primitive_recovery
+)
+
+add_test(
+    NAME mhd_reconstruction
+    COMMAND test_mhd_reconstruction
 )
 
 add_test(

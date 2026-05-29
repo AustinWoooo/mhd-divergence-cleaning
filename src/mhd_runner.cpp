@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "HLLD_mhd_solver.hpp"
+#include "mhd_reconstruction.hpp"
 #include "glm.hpp"
 #include "glm2d.hpp"
 #include "glm2d_common.hpp"
@@ -1199,8 +1200,10 @@ double max_signal_speed_2d(
 
 // -----------------------------------------------------------------------------
 //  Finite-volume RHS = -div(F) on a periodic grid.
-//  Calls MHD::compute_flux (HLLD) at every interface, falling back to the
-//  diffusive MHD::compute_llf_flux on faces flagged in the LLF masks. Does not
+//  Reconstructs primitive interface states (PCM or MUSCL/PLM via
+//  mhd_reconstruction.hpp), then calls MHD::compute_flux (HLLD) at every
+//  interface, falling back to first-order states with the diffusive
+//  MHD::compute_llf_flux on faces flagged in the LLF masks. Does not
 //  re-implement either Riemann solver.
 // -----------------------------------------------------------------------------
 //  Face-flux storage convention:
@@ -1222,10 +1225,41 @@ std::vector<State> compute_rhs_blended_2d(
     int nx, int ny,
     double dx, double dy,
     double gamma,
+    Reconstruction recon,
+    SlopeLimiter limiter,
     std::vector<double>* mass_flux_x_out = nullptr,
     std::vector<double>* mass_flux_y_out = nullptr
 ) {
     const int ncell = nx * ny;
+
+    // Cell-centred primitives, computed once per cell and reused on every face
+    // (and as the base for the MUSCL slopes below).
+    std::vector<PrimState> W(ncell);
+#pragma omp parallel for schedule(static)
+    for (int id = 0; id < ncell; ++id) {
+        W[id] = state_to_prim(U[id], gamma);
+    }
+
+    // Limited primitive slopes for piecewise-linear (MUSCL) reconstruction.
+    // For PCM they stay zero, so reconstruct_face() returns the cell averages
+    // and the scheme reduces to first-order Godunov.
+    std::vector<PrimState> slope_x(ncell), slope_y(ncell);
+    if (recon == Reconstruction::PLM) {
+#pragma omp parallel for schedule(static)
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                const int id = idx2d(i, j, nx);
+                const int iL = periodic_index(i - 1, nx);
+                const int iR = periodic_index(i + 1, nx);
+                slope_x[id] = limited_slope_prim(
+                    W[idx2d(iL, j, nx)], W[id], W[idx2d(iR, j, nx)], limiter);
+                const int jL = periodic_index(j - 1, ny);
+                const int jR = periodic_index(j + 1, ny);
+                slope_y[id] = limited_slope_prim(
+                    W[idx2d(i, jL, nx)], W[id], W[idx2d(i, jR, nx)], limiter);
+            }
+        }
+    }
 
     std::vector<State> flux_x(ncell);
     std::vector<State> flux_y(ncell);
@@ -1233,16 +1267,25 @@ std::vector<State> compute_rhs_blended_2d(
     // X-direction Riemann problems. Each face writes a unique flux_x[face]
     // and compute_flux/compute_llf_flux are pure, so the iterations are
     // independent and safe to run concurrently.
+    //
+    // On faces flagged for the positivity fallback we deliberately drop to the
+    // first-order (cell-average) states with the diffusive LLF flux; that is the
+    // most robust combination and keeps the fallback genuinely monotone.
 #pragma omp parallel for schedule(static)
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             const int iL = periodic_index(i - 1, nx);
             const int face = idx2d(i, j, nx);
-            const PrimState WL = state_to_prim(U[idx2d(iL, j, nx)], gamma);
-            const PrimState WR = state_to_prim(U[idx2d(i,  j, nx)], gamma);
-            flux_x[face] = llf_face_x[face]
-                ? compute_llf_flux(WL, WR, /*direction=*/0, gamma)
-                : compute_flux(WL, WR, /*direction=*/0, gamma);
+            const int idL = idx2d(iL, j, nx);
+            const int idR = idx2d(i,  j, nx);
+            if (llf_face_x[face]) {
+                flux_x[face] = compute_llf_flux(W[idL], W[idR],
+                                                /*direction=*/0, gamma);
+            } else {
+                const PrimState WL = reconstruct_face(W[idL], slope_x[idL], +1.0);
+                const PrimState WR = reconstruct_face(W[idR], slope_x[idR], -1.0);
+                flux_x[face] = compute_flux(WL, WR, /*direction=*/0, gamma);
+            }
             if (mass_flux_x_out) {
                 (*mass_flux_x_out)[face] = flux_x[face][RHO];
             }
@@ -1255,11 +1298,16 @@ std::vector<State> compute_rhs_blended_2d(
         const int jL = periodic_index(j - 1, ny);
         for (int i = 0; i < nx; ++i) {
             const int face = idx2d(i, j, nx);
-            const PrimState WL = state_to_prim(U[idx2d(i, jL, nx)], gamma);
-            const PrimState WR = state_to_prim(U[idx2d(i, j,  nx)], gamma);
-            flux_y[face] = llf_face_y[face]
-                ? compute_llf_flux(WL, WR, /*direction=*/1, gamma)
-                : compute_flux(WL, WR, /*direction=*/1, gamma);
+            const int idL = idx2d(i, jL, nx);
+            const int idR = idx2d(i, j,  nx);
+            if (llf_face_y[face]) {
+                flux_y[face] = compute_llf_flux(W[idL], W[idR],
+                                                /*direction=*/1, gamma);
+            } else {
+                const PrimState WL = reconstruct_face(W[idL], slope_y[idL], +1.0);
+                const PrimState WR = reconstruct_face(W[idR], slope_y[idR], -1.0);
+                flux_y[face] = compute_flux(WL, WR, /*direction=*/1, gamma);
+            }
             if (mass_flux_y_out) {
                 (*mass_flux_y_out)[face] = flux_y[face][RHO];
             }
@@ -1477,6 +1525,8 @@ std::vector<State> positivity_limited_stage(
     int nx, int ny,
     double dx, double dy,
     double gamma,
+    Reconstruction recon,
+    SlopeLimiter limiter,
     std::vector<double>* mass_flux_x_out = nullptr,
     std::vector<double>* mass_flux_y_out = nullptr
 ) {
@@ -1491,6 +1541,7 @@ std::vector<State> positivity_limited_stage(
         const std::vector<State> RHS =
             compute_rhs_blended_2d(
                 flux_state, llf_x, llf_y, nx, ny, dx, dy, gamma,
+                recon, limiter,
                 mass_flux_x_out, mass_flux_y_out);
 
         for (int id = 0; id < ncell; ++id) {
@@ -1544,6 +1595,8 @@ void rk2_step_hlld_2d(
     int nx, int ny,
     double dx, double dy,
     double gamma, double dt,
+    Reconstruction recon,
+    SlopeLimiter limiter,
     const GLM2DParams* stage_glm_params   // non-null enables stage projection
 ) {
     const int ncell = nx * ny;
@@ -1557,7 +1610,8 @@ void rk2_step_hlld_2d(
     std::vector<double> mfx(ncell, 0.0), mfy(ncell, 0.0);
     std::vector<State> Us =
         positivity_limited_stage(U, U, /*coeff=*/1.0, dt,
-                                 nx, ny, dx, dy, gamma, &mfx, &mfy);
+                                 nx, ny, dx, dy, gamma, recon, limiter,
+                                 &mfx, &mfy);
 
     const std::vector<double> S_rhs1 =
         entropy_rhs_from_mass_flux(U, Sc, mfx, mfy, nx, ny, dx, dy);
@@ -1609,7 +1663,8 @@ void rk2_step_hlld_2d(
     }
     std::vector<double> mfx2(ncell, 0.0), mfy2(ncell, 0.0);
     U = positivity_limited_stage(base, Us, /*coeff=*/0.5, dt,
-                                 nx, ny, dx, dy, gamma, &mfx2, &mfy2);
+                                 nx, ny, dx, dy, gamma, recon, limiter,
+                                 &mfx2, &mfy2);
 
     // Dual-energy corrector: SSP-RK2 combination of the entropy, advected with
     // the corrector mass fluxes, then recover pressure in low-beta cells.
@@ -1627,9 +1682,11 @@ void rk2_step_hlld_2d(
     std::vector<State>& U,
     int nx, int ny,
     double dx, double dy,
-    double gamma, double dt
+    double gamma, double dt,
+    Reconstruction recon,
+    SlopeLimiter limiter
 ) {
-    rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt, nullptr);
+    rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt, recon, limiter, nullptr);
 }
 
 // -----------------------------------------------------------------------------
@@ -2235,9 +2292,13 @@ void run_mhd_2d_case(
             // Task C: pass stage GLM params when project_each_stage is enabled.
             // ------------------------------------------------------------------
             if (do_stage_projection) {
-                rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt, &params.glm);
+                rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt,
+                                 params.reconstruction, params.limiter,
+                                 &params.glm);
             } else {
-                rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt, nullptr);
+                rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt,
+                                 params.reconstruction, params.limiter,
+                                 nullptr);
             }
 
             after_hydro_bad =

@@ -13,6 +13,23 @@ HLLD solver. The HLLD solver is kept as a pure ideal-MHD flux kernel. Some newer
 plugin components are currently tested separately and are not yet fully wired into
 the production `test_mhd_runner`.
 
+## Numerical scheme
+
+The integrated runner uses a second-order **high-resolution shock-capturing
+(HRSC)** scheme built around the HLLD flux:
+
+- **Spatial reconstruction** — piecewise-linear MUSCL reconstruction of the
+  primitive variables to the cell faces, with a TVD slope limiter
+  (`minmod`, `vanleer`, or `mc`; default `mc`). Because every limiter is TVD,
+  reconstructed face density and pressure stay positive whenever the cell
+  averages are positive. Falling back to `pcm` recovers the first-order Godunov
+  scheme for comparison. See [`include/mhd_reconstruction.hpp`](include/mhd_reconstruction.hpp).
+- **Riemann solver** — HLLD (Miyoshi & Kusano 2005), with a Local
+  Lax-Friedrichs (LLF) positivity fallback. On faces flagged by the positivity
+  limiter the scheme drops to first-order states with the diffusive LLF flux.
+- **Time integration** — SSP-RK2 (Heun), with a dual-energy formalism for the
+  low-beta cold cores.
+
 ---
 
 ## Build
@@ -37,6 +54,7 @@ ctest --test-dir build --output-on-failure
 | Executable | Description |
 |---|---|
 | `test_hlld_primitive_recovery` | Tests raw vs checked primitive recovery and verifies that raw pressure is not silently floored |
+| `test_mhd_reconstruction` | Unit tests for the MUSCL slope limiters: linear exactness, extremum clipping, and bounded (positivity-preserving) face values |
 | `test_cleaning_plugins` | Tests the first-stage cleaning plugin interface and GLM flux wrapper |
 | `test_mhd_runner` | Integrated 2D HLLD + divergence-control runner |
 | `test_glm_2d` | Standalone 2D GLM cleaning test on a divergence pulse |
@@ -47,15 +65,18 @@ ctest --test-dir build --output-on-failure
 ## `test_mhd_runner` — Usage
 
 ```bash
-./build/test_mhd_runner [problem] [cleaning...]
+./build/test_mhd_runner [options] [problem] [cleaning...]
 ```
 
 ### Arguments
 
 | Argument | Values | Default |
 |---|---|---|
-| `problem` | `orszag_tang` \| `brio_wu` \| `field_loop` \| `divergence_advection` | `orszag_tang` and `brio_wu` |
+| `problem` | `orszag_tang` \| `field_loop` \| `divergence_advection` | `orszag_tang`|
 | `cleaning` | see table below | all available methods |
+| `--reconstruction` | `pcm` (first-order Godunov) \| `plm` (second-order MUSCL HRSC) | `plm` |
+| `--first-order` | alias for `--reconstruction pcm` | — |
+| `--limiter` | `minmod` \| `vanleer` \| `mc` (only used for `plm`) | `mc` |
 
 ### Cleaning / divergence-control method names
 
@@ -86,12 +107,10 @@ ctest --test-dir build --output-on-failure
 
 # One problem, all cleaning methods
 ./build/test_mhd_runner orszag_tang
-./build/test_mhd_runner brio_wu
 ./build/test_mhd_runner field_loop
 ./build/test_mhd_runner divergence_advection
 
 # One problem, one cleaning method
-./build/test_mhd_runner brio_wu mixed_glm
 ./build/test_mhd_runner orszag_tang hyperbolic_glm
 ./build/test_mhd_runner field_loop mixed_glm
 ./build/test_mhd_runner divergence_advection mixed_glm
@@ -130,7 +149,6 @@ Filename prefixes:
 | Problem | Prefix |
 |---|---|
 | Orszag-Tang vortex | `mhd_ot` |
-| Brio-Wu shock tube | `mhd_bw` |
 | Field-loop advection | `mhd_fl` |
 | Divergence advection | `mhd_da` |
 
@@ -145,13 +163,6 @@ Generated `results/` files are reproducibility artifacts. Do not commit regenera
 - Smooth, periodic, fully 2D MHD vortex problem
 - Parameters: γ = 5/3, t_end = 0.5, N = 128
 - Useful for comparing robustness and divergence growth in a nonlinear MHD flow
-
-### Brio-Wu Shock Tube 2D Strip
-
-- 1D MHD shock tube replicated as a 2D strip
-- Parameters: γ = 2, t_end = 0.2, N = 128
-- Useful as a shock-capturing stress test
-- Current boundary and strip setup should be interpreted carefully when discussing divergence diagnostics
 
 ### Field-Loop Advection
 

@@ -51,9 +51,19 @@ void print_usage(const char* prog) {
     std::cerr
         << "Usage: " << prog
         << " [--smoke] [--preserve-thermal-pressure] [--project-each-stage]"
+        << " [--reconstruction pcm|plm] [--limiter minmod|vanleer|mc]"
+        << " [--first-order]"
         << " [problem] [cleaning...]\n"
         << "\n"
         << "  --smoke   : run a fast low-resolution verification case.\n"
+        << "  --reconstruction pcm|plm\n"
+        << "             spatial reconstruction order for the HLLD update.\n"
+        << "             pcm = first-order Godunov, plm = second-order MUSCL\n"
+        << "             high-resolution shock capturing (default: plm).\n"
+        << "  --first-order\n"
+        << "             alias for --reconstruction pcm.\n"
+        << "  --limiter minmod|vanleer|mc\n"
+        << "             TVD slope limiter for plm reconstruction (default: mc).\n"
         << "  --preserve-thermal-pressure\n"
         << "             use explicit cleaning energy repair where supported.\n"
         << "  --project-each-stage\n"
@@ -97,11 +107,15 @@ void run_problem(
     bool smoke,
     CleaningEnergyPolicy energy_policy,
     bool energy_policy_explicit,
-    bool project_each_stage   // Task C
+    bool project_each_stage,   // Task C
+    MHD::Reconstruction reconstruction,
+    MHD::SlopeLimiter limiter
 ) {
     MHDRunParams params;
     params.problem = problem;
     params.gamma   = gamma;
+    params.reconstruction = reconstruction;
+    params.limiter        = limiter;
 
     params.glm.nx = smoke ? 32 : N;
     params.glm.ny = smoke ? 32 : N;
@@ -147,6 +161,8 @@ int main(int argc, char* argv[]) {
     bool project_each_stage = false;  // Task C
     CleaningEnergyPolicy energy_policy =
         CleaningEnergyPolicy::ConserveTotalEnergy;
+    MHD::Reconstruction reconstruction = MHD::Reconstruction::PLM;
+    MHD::SlopeLimiter   limiter        = MHD::SlopeLimiter::MC;
 
     std::vector<std::string> positional;
     for (int i = 1; i < argc; ++i) {
@@ -157,6 +173,48 @@ int main(int argc, char* argv[]) {
         }
         if (arg == "--smoke") {
             smoke = true;
+            continue;
+        }
+        if (arg == "--first-order") {
+            reconstruction = MHD::Reconstruction::PCM;
+            continue;
+        }
+        if (arg == "--reconstruction") {
+            if (i + 1 >= argc) {
+                std::cerr << "--reconstruction requires an argument\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            const std::string val = argv[++i];
+            if (val == "pcm") {
+                reconstruction = MHD::Reconstruction::PCM;
+            } else if (val == "plm") {
+                reconstruction = MHD::Reconstruction::PLM;
+            } else {
+                std::cerr << "Unknown reconstruction: \"" << val << "\"\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            continue;
+        }
+        if (arg == "--limiter") {
+            if (i + 1 >= argc) {
+                std::cerr << "--limiter requires an argument\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            const std::string val = argv[++i];
+            if (val == "minmod") {
+                limiter = MHD::SlopeLimiter::MINMOD;
+            } else if (val == "vanleer") {
+                limiter = MHD::SlopeLimiter::VANLEER;
+            } else if (val == "mc") {
+                limiter = MHD::SlopeLimiter::MC;
+            } else {
+                std::cerr << "Unknown limiter: \"" << val << "\"\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
             continue;
         }
         if (arg == "--preserve-thermal-pressure") {
@@ -251,7 +309,9 @@ int main(int argc, char* argv[]) {
             smoke,
             energy_policy,
             energy_policy_explicit,
-            project_each_stage
+            project_each_stage,
+            reconstruction,
+            limiter
         );
     }
 

@@ -144,6 +144,49 @@ Cautionary / robustness-control variants:
 
 ---
 
+## Optional MPI Sweep Runner
+
+MPI support is optional and disabled by default. Enable it only when you want to
+run coarse-grained parameter sweeps over independent numerical experiments:
+
+```bash
+cmake -S . -B build-mpi -DENABLE_MPI=ON
+cmake --build build-mpi -j
+mpirun -np 2 ./build-mpi/mhd_sweep_mpi --smoke
+```
+
+`mhd_sweep_mpi` does **not** domain-decompose the MHD grid. Each MPI rank runs
+complete `mhd_runner` cases assigned by job index, so there are no MPI ghost
+cells and no MPI calls inside the hydro update, HLLD flux, or cleaning equations.
+The default job list is intentionally small and includes `none`,
+`hyperbolic_glm`, `mixed_glm`, `parabolic`, `elliptic_projection`,
+`powell_source`, `eglm`, and `gi_mixed_eglm`.
+
+Useful options:
+
+```bash
+mpirun -np 4 ./build-mpi/mhd_sweep_mpi \
+  --problem divergence_advection \
+  --nx 32 --ny 32 --t-end 0.02 --cfl 0.4 \
+  --methods none,mixed_glm,eglm,gi_mixed_eglm \
+  --prefix mpi_da
+```
+
+Rank-local sweep summaries are written to
+`results/mhd_sweep_mpi/summaries/summary_rank_*.csv`. Individual solver outputs
+still go through `results/mhd_runner/` with unique prefixes, avoiding concurrent
+writes to the same result file. Merge rank summaries with:
+
+```bash
+python scripts/merge_mpi_sweep_summaries.py
+```
+
+Full domain-decomposed MPI is future work. In particular, local finite-volume
+updates would need ghost-cell exchange, while `elliptic_projection` would need a
+parallel/global Poisson solve or a different projection strategy.
+
+---
+
 ## Output
 
 Results are written to `results/mhd_runner/`:

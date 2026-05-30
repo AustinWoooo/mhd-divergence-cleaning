@@ -1,5 +1,5 @@
 problem,method,completed,final_time,final_L2_norm_fv,final_Linf_norm_fv,min_pressure,mass_drift,energy_drift,has_nonfinite,has_negative_density,has_negative_pressure
-orszag_tang,none,1,0.5,0.106175,4.73466,0.0171557,0.0,0.0,0,0,0
+orszag_tang,none,1,0.5,0.393323,16.6776,0.000377497,0.0,2.8632210665176523e-06,0,0,0
 orszag_tang,hyperbolic_glm,1,0.5,0.0119121,0.304289,0.0165535,0.0,0.0,0,0,0
 orszag_tang,mixed_glm,1,0.5,0.0150101,0.350572,0.0168071,0.0,0.0,0,0,0
 orszag_tang,mixed_eglm,1,0.5,0.0147583,0.48871,0.0166752,0.0,-0.0004752946970282614,0,0,0
@@ -13,8 +13,10 @@ field_loop,hyperbolic_glm,1,0.5,0.0463918,0.441176,1.0,0.0,0.0,0,0,0
 field_loop,mixed_glm,1,0.5,0.0269158,0.670447,1.0,0.0,0.0,0,0,0
 field_loop,mixed_eglm,1,0.5,0.0269158,0.670447,1.0,0.0,0.0,0,0,0
 field_loop,gi_mixed_eglm,1,0.5,0.0238367,0.354904,1.0,0.0,0.0,0,0,0
-divergence_advection,none,1,0.5,0.000447296,0.00280685,0.924421,0.0,0.0,0,0,0
-divergence_advection,hyperbolic_glm,1,0.5,0.000201315,0.000609611,0.97973,0.0,0.0,0,0,0
-divergence_advection,mixed_glm,1,0.5,5.36364e-05,0.000156046,0.977977,0.0,0.0,0,0,0
-divergence_advection,mixed_eglm,1,0.5,5.28019e-05,0.000131198,0.98403,0.0,-3.807203228364206e-06,0,0,0
-divergence_advection,gi_mixed_eglm,1,0.5,4.87626e-05,0.000117266,0.984518,0.0,-7.614406456897486e-06,0,0,0
+divergence_advection,none,1,0.5,0.00169634,0.0226025,0.89855,0.0,0.0,0,0,0
+divergence_advection,hyperbolic_glm,1,0.5,0.000174024,0.000502365,0.974973,0.0,0.0,0,0,0
+divergence_advection,mixed_glm,1,0.5,5.43888e-05,0.00018175,0.977135,0.0,0.0,0,0,0
+divergence_advection,mixed_eglm,1,0.5,5.21224e-05,0.000145413,0.982594,0.0,-3.807203228364206e-06,0,0,0
+divergence_advection,gi_mixed_eglm,1,0.5,4.81601e-05,0.000127558,0.98297,0.0,-7.614406456897486e-06,0,0,0
+divergence_advection,parabolic,1,0.5,5.91111e-05,0.000145152,0.97586,0.0,-7.614406456897486e-06,0,0,0
+divergence_advection,elliptic_projection,1,0.5,3.36703e-11,1.6638e-10,0.982363,0.0,-7.614406456897486e-06,0,0,0

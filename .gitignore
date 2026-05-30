@@ -55,3 +55,16 @@ project_deps*.dot
 .claude/
 .agents/
 .codex/
+
+# Large regenerated 2D GLM full-field snapshots; compact divergence CSVs are tracked.
+results/glm_2d/snapshots/glm_2d_*_final.csv
+
+# Large MHD runner snapshots not required by the standard canonical snapshot figures.
+results/mhd_runner/snapshots/mhd_da_hyperbolic_glm_final.csv
+results/mhd_runner/snapshots/mhd_da_mixed_eglm_final.csv
+results/mhd_runner/snapshots/mhd_da_gi_mixed_eglm_final.csv
+results/mhd_runner/snapshots/mhd_da_parabolic_final.csv
+results/mhd_runner/snapshots/mhd_da_elliptic_projection_final.csv
+results/mhd_runner/snapshots/mhd_fl_hyperbolic_glm_final.csv
+results/mhd_runner/snapshots/mhd_fl_mixed_eglm_final.csv
+results/mhd_runner/snapshots/mhd_fl_gi_mixed_eglm_final.csv

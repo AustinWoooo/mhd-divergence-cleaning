@@ -80,6 +80,9 @@ ctest --test-dir build --output-on-failure
 | `--reconstruction` | `pcm` (first-order Godunov) \| `plm` (second-order MUSCL HRSC) | `plm` |
 | `--first-order` | alias for `--reconstruction pcm` | — |
 | `--limiter` | `minmod` \| `vanleer` \| `mc` (only used for `plm`) | `mc` |
+| `--nx`, `--ny` | positive integers | problem default |
+| `--tfinal` / `--t-end` | positive final time | problem default |
+| `--output-prefix` | output filename prefix | problem prefix |
 
 ### Cleaning / divergence-control method names
 
@@ -121,7 +124,7 @@ Cautionary / robustness-control variants:
 ## Examples
 
 ```bash
-# Default problem set and all cleaning methods
+# Default problem and all cleaning methods
 ./build/test_mhd_runner
 
 # One problem, all cleaning methods
@@ -138,9 +141,59 @@ Cautionary / robustness-control variants:
 ./build/test_mhd_runner orszag_tang none hyperbolic_glm mixed_glm
 ./build/test_mhd_runner divergence_advection none hyperbolic_glm mixed_glm
 
+# Scripted resolution/prefix controls
+./build/test_mhd_runner --nx 64 --ny 64 --tfinal 0.5 \
+  --output-prefix mhd_fl_plm_n64 --reconstruction plm field_loop none
+
 # Show help
 ./build/test_mhd_runner --help
 ```
+
+---
+
+## Regenerate Standard Results and Figures
+
+From a fresh build, this regenerates the standard solver outputs and figures
+used by the report:
+
+```bash
+rm -rf build
+cmake -S . -B build
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+
+./build/test_mhd_runner
+./build/test_mhd_runner field_loop \
+  none hyperbolic_glm mixed_glm mixed_eglm gi_mixed_eglm
+./build/test_mhd_runner divergence_advection \
+  none hyperbolic_glm mixed_glm mixed_eglm gi_mixed_eglm \
+  parabolic elliptic_projection
+
+python3 scripts/run_field_loop_convergence.py
+python3 scripts/plot_mhd_runner.py
+python3 scripts/plot_cleaning_diagnostics.py
+python3 scripts/plot_pressure_diagnostics.py
+python3 scripts/plot_glm_1d.py
+python3 scripts/plot_glm_2d.py
+```
+
+The convergence script writes
+`results/mhd_runner/convergence/field_loop_convergence.csv`,
+`figures/mhd_runner/field_loop_convergence.png`,
+`results/mhd_runner/hrsc/pcm_vs_plm_summary.csv`, and
+`figures/mhd_runner/pcm_vs_plm_divB.png`.
+
+### OpenMP
+
+OpenMP is enabled in the 2D loops used by the expensive flux, CFL, and
+diagnostic work. Control thread count with `OMP_NUM_THREADS`:
+
+```bash
+OMP_NUM_THREADS=4 ./build/test_mhd_runner
+```
+
+The numerical algorithm is unchanged; this is shared-memory loop parallelism on
+a single run, not MPI domain decomposition.
 
 ---
 
@@ -158,6 +211,8 @@ mpirun -np 2 ./build-mpi/mhd_sweep_mpi --smoke
 `mhd_sweep_mpi` does **not** domain-decompose the MHD grid. Each MPI rank runs
 complete `mhd_runner` cases assigned by job index, so there are no MPI ghost
 cells and no MPI calls inside the hydro update, HLLD flux, or cleaning equations.
+It is useful for parameter sweeps and as a bonus parallel workflow, not for
+strong/weak scaling of one MHD domain.
 The default job list is intentionally small and includes `none`,
 `hyperbolic_glm`, `mixed_glm`, `parabolic`, `elliptic_projection`,
 `powell_source`, `eglm`, and `gi_mixed_eglm`.
@@ -219,6 +274,17 @@ CSVs unless they are intentionally curated for the final report. Use finite-volu
 normalized divergence diagnostics (`L1_norm_fv`, `L2_norm_fv`, `Linf_norm_fv`) as
 the main comparison metrics. Centered-difference divB diagnostics are retained as
 secondary/internal checks for the standalone cleaning demos.
+
+Accuracy evidence is written to `results/mhd_runner/convergence/` and
+`figures/mhd_runner/`. The field-loop convergence script compares PCM
+first-order reconstruction with PLM/MUSCL reconstruction against the periodic
+exact shift of the initial loop and records the measured slopes. The same script
+also writes a direct PCM-vs-PLM field-loop divergence-history figure, supporting
+the HRSC reconstruction claim without changing the solver architecture.
+
+Future improvement: update the GLM cleaning speed `ch` dynamically from the
+current maximum signal speed each step. The current runner preserves the
+historical behavior and freezes `ch` at the initial maximum signal speed.
 
 ---
 

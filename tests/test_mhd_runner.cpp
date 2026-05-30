@@ -22,6 +22,7 @@
 // =============================================================================
 
 #include <algorithm>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -52,6 +53,7 @@ void print_usage(const char* prog) {
         << "Usage: " << prog
         << " [--smoke] [--preserve-thermal-pressure] [--project-each-stage]"
         << " [--reconstruction pcm|plm] [--limiter minmod|vanleer|mc]"
+        << " [--nx N] [--ny N] [--tfinal T] [--output-prefix PREFIX]"
         << " [--first-order]"
         << " [problem] [cleaning...]\n"
         << "\n"
@@ -64,6 +66,12 @@ void print_usage(const char* prog) {
         << "             alias for --reconstruction pcm.\n"
         << "  --limiter minmod|vanleer|mc\n"
         << "             TVD slope limiter for plm reconstruction (default: mc).\n"
+        << "  --nx N, --ny N\n"
+        << "             grid resolution for non-smoke runs (default: problem N).\n"
+        << "  --tfinal T, --t-end T\n"
+        << "             final time override for the selected problem.\n"
+        << "  --output-prefix PREFIX\n"
+        << "             output filename prefix for the selected run.\n"
         << "  --preserve-thermal-pressure\n"
         << "             use explicit cleaning energy repair where supported.\n"
         << "  --project-each-stage\n"
@@ -109,7 +117,12 @@ void run_problem(
     bool energy_policy_explicit,
     bool project_each_stage,   // Task C
     MHD::Reconstruction reconstruction,
-    MHD::SlopeLimiter limiter
+    MHD::SlopeLimiter limiter,
+    int nx_override,
+    int ny_override,
+    double t_end_override,
+    bool has_t_end_override,
+    const std::string& output_prefix_override
 ) {
     MHDRunParams params;
     params.problem = problem;
@@ -117,16 +130,20 @@ void run_problem(
     params.reconstruction = reconstruction;
     params.limiter        = limiter;
 
-    params.glm.nx = smoke ? 32 : N;
-    params.glm.ny = smoke ? 32 : N;
+    params.glm.nx = smoke ? 32 : (nx_override > 0 ? nx_override : N);
+    params.glm.ny = smoke ? 32 : (ny_override > 0 ? ny_override : N);
     params.glm.xlen = 1.0;
     params.glm.ylen = 1.0;
-    params.glm.t_end = smoke ? std::min(t_end, 0.02) : t_end;
+    const double selected_t_end =
+        has_t_end_override ? t_end_override : t_end;
+    params.glm.t_end = smoke ? std::min(selected_t_end, 0.02) : selected_t_end;
     params.glm.cfl   = 0.4;
     params.glm.cp    = 0.2;
     params.glm.write_snapshot = !smoke;
     params.glm.write_initial_snapshot = false;
-    params.glm.out_prefix = smoke ? prefix + "_smoke" : prefix;
+    const std::string base_prefix =
+        output_prefix_override.empty() ? prefix : output_prefix_override;
+    params.glm.out_prefix = smoke ? base_prefix + "_smoke" : base_prefix;
     params.glm.project_each_stage = project_each_stage;
 
     for (CleaningType type : cases) {
@@ -163,6 +180,11 @@ int main(int argc, char* argv[]) {
         CleaningEnergyPolicy::ConserveTotalEnergy;
     MHD::Reconstruction reconstruction = MHD::Reconstruction::PLM;
     MHD::SlopeLimiter   limiter        = MHD::SlopeLimiter::MC;
+    int nx_override = -1;
+    int ny_override = -1;
+    double t_end_override = 0.0;
+    bool has_t_end_override = false;
+    std::string output_prefix_override;
 
     std::vector<std::string> positional;
     for (int i = 1; i < argc; ++i) {
@@ -212,6 +234,63 @@ int main(int argc, char* argv[]) {
                 limiter = MHD::SlopeLimiter::MC;
             } else {
                 std::cerr << "Unknown limiter: \"" << val << "\"\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            continue;
+        }
+        if (arg == "--nx") {
+            if (i + 1 >= argc) {
+                std::cerr << "--nx requires an argument\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            nx_override = std::atoi(argv[++i]);
+            if (nx_override <= 0) {
+                std::cerr << "--nx must be positive\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            continue;
+        }
+        if (arg == "--ny") {
+            if (i + 1 >= argc) {
+                std::cerr << "--ny requires an argument\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            ny_override = std::atoi(argv[++i]);
+            if (ny_override <= 0) {
+                std::cerr << "--ny must be positive\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            continue;
+        }
+        if (arg == "--tfinal" || arg == "--t-end") {
+            if (i + 1 >= argc) {
+                std::cerr << arg << " requires an argument\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            t_end_override = std::atof(argv[++i]);
+            if (t_end_override <= 0.0) {
+                std::cerr << arg << " must be positive\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            has_t_end_override = true;
+            continue;
+        }
+        if (arg == "--output-prefix") {
+            if (i + 1 >= argc) {
+                std::cerr << "--output-prefix requires an argument\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            output_prefix_override = argv[++i];
+            if (output_prefix_override.empty()) {
+                std::cerr << "--output-prefix must be non-empty\n\n";
                 print_usage(argv[0]);
                 return 1;
             }
@@ -311,7 +390,12 @@ int main(int argc, char* argv[]) {
             energy_policy_explicit,
             project_each_stage,
             reconstruction,
-            limiter
+            limiter,
+            nx_override,
+            ny_override,
+            t_end_override,
+            has_t_end_override,
+            output_prefix_override
         );
     }
 

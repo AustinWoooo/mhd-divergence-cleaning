@@ -90,6 +90,7 @@ struct MHDRunDiagnostics {
     double total_momentum_z = 0.0;
     double total_energy = 0.0;
     double min_density = std::numeric_limits<double>::infinity();
+    double min_raw_pressure = std::numeric_limits<double>::infinity();
     double min_pressure = std::numeric_limits<double>::infinity();
     bool has_nonfinite = false;
     bool has_negative_density = false;
@@ -692,14 +693,23 @@ MHDRunDiagnostics compute_mhd_run_diagnostics(
             }
         }
 
-        const PrimState W = state_to_prim(cell, gamma);
-        if (!std::isfinite(W.p)) {
+        PrimitiveRecoveryStatus recovery;
+        const PrimState W_checked =
+            PrimState::from_conserved_checked(cell, gamma, &recovery);
+
+        if (!std::isfinite(recovery.raw_pressure)) {
             out.has_nonfinite = true;
         } else {
-            out.min_pressure = std::min(out.min_pressure, W.p);
-            if (W.p < 0.0) {
+            out.min_raw_pressure =
+                std::min(out.min_raw_pressure, recovery.raw_pressure);
+            if (recovery.raw_pressure < 0.0) {
                 out.has_negative_pressure = true;
             }
+        }
+        if (!std::isfinite(W_checked.p)) {
+            out.has_nonfinite = true;
+        } else {
+            out.min_pressure = std::min(out.min_pressure, W_checked.p);
         }
     }
 
@@ -1859,7 +1869,7 @@ void write_mhd_run_summary(
          << energy_initial << ","
          << energy_final << ","
          << energy_drift << ","
-         << final_diag.min_pressure << ","
+         << final_diag.min_raw_pressure << ","
          << final_diag.min_pressure << ","
          << final_diag.min_density << ","
          << cleaning_energy_policy_name(energy_policy) << ",";

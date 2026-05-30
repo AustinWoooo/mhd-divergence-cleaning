@@ -58,10 +58,26 @@ ctest --test-dir build --output-on-failure
 |---|---|
 | `test_hlld_primitive_recovery` | Tests raw vs checked primitive recovery and verifies that raw pressure is not silently floored |
 | `test_mhd_reconstruction` | Unit tests for the MUSCL slope limiters: linear exactness, extremum clipping, and bounded (positivity-preserving) face values |
-| `test_cleaning_plugins` | Tests the first-stage cleaning plugin interface and GLM flux wrapper |
+| `test_cleaning_plugins` | Tests the experimental cleaning-plugin prototype and GLM flux wrapper; this path is not used by the production runner |
 | `test_mhd_runner` | Integrated 2D HLLD + divergence-control runner |
 | `test_glm_2d` | Standalone 2D GLM cleaning test on a divergence pulse |
 | `test_glm_1d` | Standalone 1D GLM cleaning test |
+
+---
+
+## Cleaning plugin status
+
+The cleaning-plugin interface is currently an **experimental prototype**, not the
+main production architecture. It is kept to test whether divergence-control methods
+can eventually be wrapped behind a common interface, but the integrated
+`test_mhd_runner` executable does not use this plugin system to choose or apply
+cleaning methods.
+
+The production runner currently uses the `CleaningType` enum and the integrated
+runner / `advance_glm_2d_one_step()` dispatch path. This keeps the final-project
+workflow explicit and reproducible while the supported method set is still fixed.
+Future work may either promote the prototype into a formal method registry or move
+it out of the main workflow if no plugin-driven runner is needed.
 
 ---
 
@@ -117,7 +133,7 @@ Cautionary / robustness-control variants:
   `d(rho u)/dt = -(div B) B`, `dB/dt = -(div B) u`, `dE/dt = -(div B)(u.B) - B.grad(psi)`, and `dpsi/dt = -u.grad(psi)`, applied after the mixed-GLM update.
 - The EGLM/GI-EGLM source terms use the conserved-variable ordering `[rho, rho*ux, rho*uy, rho*uz, Bx, By, Bz, E, psi]`; the code updates the matching momentum, magnetic-field, energy, and psi slots consistently with that ordering.
 - Because GI-EGLM is applied as a split source using the pre-cleaning reference state, the desired Galilean-invariant continuous formulation needs author confirmation at the report level. The current implementation documents the intended source terms but does not prove exact frame invariance of the full operator-split hydro plus cleaning step.
-- The first-stage plugin interface currently has dedicated tests for the GLM flux wrapper, but the production runner is not yet fully plugin-driven.
+- The cleaning-plugin interface is currently an **experimental prototype**. It has dedicated tests for the GLM flux wrapper, but the production runner does **not** dispatch through this plugin interface. Production cleaning methods are selected through `CleaningType` and routed through the integrated runner / `advance_glm_2d_one_step()` path.
 
 ---
 

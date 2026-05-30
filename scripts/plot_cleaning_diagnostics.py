@@ -37,6 +37,8 @@ METHODS = [
     "parabolic",
     "elliptic_projection",
     "powell_source",
+    "powell_source_subcycled",
+    "powell_source_limited",
     "mixed_eglm",
     "gi_mixed_eglm",
 ]
@@ -48,6 +50,8 @@ LABELS = {
     "parabolic": "Parabolic",
     "elliptic_projection": "Projection",
     "powell_source": "Powell",
+    "powell_source_subcycled": "Powell subcycled",
+    "powell_source_limited": "Powell limited",
     "mixed_eglm": "Mixed EGLM",
     "gi_mixed_eglm": "GI Mixed EGLM",
 }
@@ -59,6 +63,8 @@ COLORS = {
     "parabolic": "#d62728",
     "elliptic_projection": "#9467bd",
     "powell_source": "#8c564b",
+    "powell_source_subcycled": "#7f7f7f",
+    "powell_source_limited": "#17becf",
     "mixed_eglm": "#e377c2",
     "gi_mixed_eglm": "#bcbd22",
 }
@@ -67,6 +73,7 @@ STAGE_COLORS = {
     "after_hydro": "#4c78a8",
     "before_cleaning": "#f58518",
     "after_cleaning": "#e45756",
+    "step_start": "#72b7b2",
     "unknown": "#9d9d9d",
 }
 
@@ -229,12 +236,82 @@ def plot_normalized_l2_divergence() -> Path | None:
     return save_figure(fig, "cleaning_ot_l2_norm_fv.png")
 
 
+def normalize_failure_stage(stage: object) -> str:
+    """Map detailed solver checkpoint names to a few plot-friendly groups."""
+    text = str(stage).strip().lower()
+    if not text or text == "nan":
+        return "unknown"
+    if "step_start" in text:
+        return "step_start"
+    if "before" in text and "clean" in text:
+        return "before_cleaning"
+    if "clean" in text or "powell" in text:
+        return "after_cleaning"
+    if "hydro" in text:
+        return "after_hydro"
+    return "unknown"
+
+
+def compact_first_failures(failures: pd.DataFrame) -> pd.DataFrame:
+    """Return one first bad-state row per (problem, method, energy_policy) run.
+
+    The failure directory may contain many per-step diagnostic rows.  Plotting all
+    of them makes unreadable figures with hundreds of x tick labels.  For report
+    figures we only want the earliest bad cell/state for each run.
+    """
+    if failures.empty:
+        return failures.copy()
+
+    df = failures.copy()
+
+    if "problem" in df.columns:
+        df = df[df["problem"].astype(str) == PROBLEM]
+    else:
+        df["problem"] = PROBLEM
+
+    if "method" not in df.columns:
+        df["method"] = "unknown"
+    if "energy_policy" not in df.columns:
+        df["energy_policy"] = "unknown"
+
+    if "failure_stage" not in df.columns:
+        df["failure_stage"] = df.get("stage", "unknown")
+    df["failure_stage"] = df["failure_stage"].fillna("unknown").astype(str)
+    df["failure_stage_group"] = df["failure_stage"].map(normalize_failure_stage)
+
+    if "failure_time" in df.columns:
+        df["failure_time"] = pd.to_numeric(df["failure_time"], errors="coerce")
+    elif "time" in df.columns:
+        df["failure_time"] = pd.to_numeric(df["time"], errors="coerce")
+    else:
+        df["failure_time"] = np.nan
+
+    if "step" in df.columns:
+        df["step"] = pd.to_numeric(df["step"], errors="coerce")
+    else:
+        df["step"] = np.nan
+
+    df = df[np.isfinite(df["failure_time"])].copy()
+    if df.empty:
+        return df
+
+    group_cols = ["problem", "method", "energy_policy"]
+    df = (
+        df.sort_values(["failure_time", "step"], kind="stable")
+          .groupby(group_cols, as_index=False, sort=False)
+          .first()
+    )
+
+    return df
+
+
 def failure_summary(failures: pd.DataFrame) -> pd.DataFrame:
     columns = [
         "problem",
         "method",
         "energy_policy",
         "failure_stage",
+        "failure_stage_group",
         "failure_time",
         "i",
         "j",
@@ -253,8 +330,15 @@ def failure_summary(failures: pd.DataFrame) -> pd.DataFrame:
     df = failures.copy()
     if "failure_stage" not in df.columns:
         df["failure_stage"] = df.get("stage", "unknown")
-    if "failure_time" not in df.columns:
-        df["failure_time"] = df.get("time", np.nan)
+    df["failure_stage"] = df["failure_stage"].fillna("unknown").astype(str)
+    if "failure_stage_group" not in df.columns:
+        df["failure_stage_group"] = df["failure_stage"].map(normalize_failure_stage)
+    if "failure_time" in df.columns:
+        df["failure_time"] = pd.to_numeric(df["failure_time"], errors="coerce")
+    elif "time" in df.columns:
+        df["failure_time"] = pd.to_numeric(df["time"], errors="coerce")
+    else:
+        df["failure_time"] = np.nan
     for column in columns:
         if column not in df.columns:
             df[column] = np.nan
@@ -267,19 +351,25 @@ def failure_summary(failures: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_failure_times(failures: pd.DataFrame) -> Path | None:
-    table = failure_summary(failures)
+    table = compact_first_failures(failures)
+    table = failure_summary(table)
     if table.empty:
         return None
-    table = table.sort_values(["method", "energy_policy"], kind="stable")
+
+    method_order = {method: i for i, method in enumerate(METHODS)}
+    table["method_order"] = table["method"].astype(str).map(method_order).fillna(len(METHODS))
+    table = table.sort_values(["method_order", "method", "energy_policy"], kind="stable")
+
     times = pd.to_numeric(table["failure_time"], errors="coerce")
     labels = [
         f"{method_label(str(row.method))}\n{str(row.energy_policy).replace('_', ' ')}"
         for row in table.itertuples(index=False)
     ]
-    stages = table["failure_stage"].fillna("unknown").astype(str)
+    stages = table.get("failure_stage_group", table["failure_stage"]).fillna("unknown").astype(str)
     colors = [STAGE_COLORS.get(stage, STAGE_COLORS["unknown"]) for stage in stages]
 
-    fig, ax = plt.subplots(figsize=(9.5, 5.0))
+    fig_width = max(7.5, 1.15 * len(table))
+    fig, ax = plt.subplots(figsize=(fig_width, 5.0))
     x = np.arange(len(table))
     bars = ax.bar(x, times, color=colors)
     for bar, stage, time_value in zip(bars, stages, times):
@@ -287,41 +377,59 @@ def plot_failure_times(failures: pd.DataFrame) -> Path | None:
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height(),
-                stage,
+                stage.replace("_", "\n"),
                 ha="center",
                 va="bottom",
-                rotation=90,
+                rotation=0,
                 fontsize=7,
             )
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=35, ha="right", fontsize=8)
+    ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=8)
     ax.set_ylabel("failure time")
-    ax.set_title("Orszag-Tang bad-state time by method and energy policy")
+    ax.set_title("Orszag-Tang first bad-state time")
     ax.grid(True, axis="y", alpha=0.25)
     return save_figure(fig, "cleaning_failure_times.png")
 
-
 def plot_failure_energy(failures: pd.DataFrame) -> Path | None:
-    if failures.empty:
+    rows = compact_first_failures(failures)
+    if rows.empty:
         return None
+
     required = ["total_energy", "kinetic_energy", "magnetic_energy", "internal_energy"]
-    if not any(column in failures.columns for column in required):
+    if not any(column in rows.columns for column in required):
         warn("failure CSVs lack energy decomposition columns")
         return None
 
-    rows = failures.copy()
-    rows["failure_time"] = pd.to_numeric(rows.get("time", np.nan), errors="coerce")
-    rows["stage"] = rows.get("stage", "unknown")
+    for column in required:
+        if column not in rows.columns:
+            rows[column] = np.nan
+
+    energy_table = rows[required].apply(pd.to_numeric, errors="coerce")
+    has_energy = energy_table.notna().any(axis=1)
+    if not has_energy.any():
+        warn("failure CSVs contain no finite energy decomposition values")
+        return None
+    if (~has_energy).any():
+        warn(f"dropping {(~has_energy).sum()} failure rows without energy decomposition")
+    rows = rows.loc[has_energy].copy()
+    energy_table = energy_table.loc[has_energy]
+
+    method_order = {method: i for i, method in enumerate(METHODS)}
+    rows["method_order"] = rows["method"].astype(str).map(method_order).fillna(len(METHODS))
+    rows = rows.sort_values(["method_order", "method", "energy_policy"], kind="stable")
+    energy_table = energy_table.loc[rows.index]
+
     labels = []
     for row in rows.itertuples(index=False):
         method = method_label(str(getattr(row, "method", "unknown")))
         policy = str(getattr(row, "energy_policy", "unknown")).replace("_", " ")
-        stage = str(getattr(row, "stage", "unknown"))
+        stage = str(getattr(row, "failure_stage", "unknown"))
         time = getattr(row, "failure_time", np.nan)
-        labels.append(f"{method}\n{policy}\n{stage}, t={time:.4g}")
+        labels.append(f"{method}\n{policy}\n{stage}\nt={time:.4g}")
 
-    values = np.vstack([pd.to_numeric(rows.get(col, np.nan), errors="coerce") for col in required])
-    fig, ax = plt.subplots(figsize=(10.5, 5.5))
+    values = np.vstack([energy_table[col].to_numpy(dtype=float) for col in required])
+    fig_width = max(8.5, 1.25 * len(rows))
+    fig, ax = plt.subplots(figsize=(fig_width, 5.5))
     x = np.arange(len(rows))
     width = 0.18
     offsets = np.linspace(-1.5 * width, 1.5 * width, len(required))
@@ -329,13 +437,12 @@ def plot_failure_energy(failures: pd.DataFrame) -> Path | None:
         ax.bar(x + offset, data, width=width, label=column.replace("_", " "))
     ax.axhline(0.0, color="black", linewidth=0.8)
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=35, ha="right", fontsize=8)
+    ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=8)
     ax.set_ylabel("cell energy density")
     ax.set_title("Energy decomposition at first bad cell")
     ax.legend(fontsize=8)
     ax.grid(True, axis="y", alpha=0.25)
     return save_figure(fig, "cleaning_failure_energy_decomposition.png")
-
 
 def orszag_tang_summaries(summaries: pd.DataFrame) -> pd.DataFrame:
     if summaries.empty or "problem" not in summaries.columns:
@@ -346,40 +453,93 @@ def orszag_tang_summaries(summaries: pd.DataFrame) -> pd.DataFrame:
     return summaries[mask].copy()
 
 
+def completed_or_failed_summary_mask(df: pd.DataFrame) -> pd.Series:
+    """Return True for runs suitable for conservation/drift comparisons.
+
+    Energy drift is only meaningful for runs that reached the intended final time
+    without reporting a bad state. Failed runs are diagnosed by the failure plots
+    instead of being mixed into the conservation comparison.
+    """
+    mask = pd.Series(True, index=df.index)
+
+    if "final_time_reached" in df.columns:
+        final_time = pd.to_numeric(df["final_time_reached"], errors="coerce")
+        # Orszag-Tang benchmark in this script targets t=0.5.  Allow tiny roundoff.
+        mask &= final_time >= 0.5 - 1.0e-10
+
+    if "failure_time" in df.columns:
+        failure_time = pd.to_numeric(df["failure_time"], errors="coerce")
+        mask &= ~np.isfinite(failure_time)
+
+    if "failure_reason" in df.columns:
+        reason = df["failure_reason"].fillna("").astype(str).str.strip().str.lower()
+        mask &= reason.isin(["", "nan", "none", "0"])
+
+    return mask
+
+
 def plot_energy_drift(summaries: pd.DataFrame) -> Path | None:
-    df = orszag_tang_summaries(summaries)
-    if df.empty:
+    df_all = orszag_tang_summaries(summaries)
+    if df_all.empty:
         warn("no full Orszag-Tang summaries available for energy drift plot")
         return None
     for col in ["energy_initial", "energy_final", "energy_drift"]:
-        if col not in df.columns:
+        if col not in df_all.columns:
             warn(f"summaries lack {col}; skipping energy drift plot")
             return None
-    df["method_order"] = df["method"].map({method: i for i, method in enumerate(METHODS)})
-    df = df.sort_values("method_order")
+
+    df_all = df_all.copy()
+    df_all["method_order"] = df_all["method"].map({method: i for i, method in enumerate(METHODS)})
+    df_all = df_all.sort_values("method_order")
+
+    complete_mask = completed_or_failed_summary_mask(df_all)
+    skipped = df_all.loc[~complete_mask, "method"].astype(str).map(method_label).tolist()
+    df = df_all.loc[complete_mask].copy()
+
+    if df.empty:
+        warn("no completed non-failed Orszag-Tang runs available for energy drift plot; using all summaries")
+        df = df_all.copy()
+    elif skipped:
+        warn(
+            "energy drift plot excludes failed/non-completed runs: "
+            + ", ".join(skipped)
+        )
+
     initial = pd.to_numeric(df["energy_initial"], errors="coerce")
     final = pd.to_numeric(df["energy_final"], errors="coerce")
     relative = pd.to_numeric(df["energy_drift"], errors="coerce")
     absolute = final - initial
 
+    finite = np.isfinite(initial) & np.isfinite(final) & np.isfinite(relative)
+    df = df.loc[finite].copy()
+    absolute = absolute.loc[finite]
+    relative = relative.loc[finite]
+    if df.empty:
+        warn("energy drift columns contain no finite completed-run values")
+        return None
+
     fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.6), sharex=True)
     labels = [method_label(str(method)) for method in df["method"]]
     x = np.arange(len(df))
     colors = [COLORS.get(str(method), "#777777") for method in df["method"]]
+
     axes[0].bar(x, absolute, color=colors)
     axes[0].axhline(0.0, color="black", linewidth=0.8)
     axes[0].set_ylabel("energy_final - energy_initial")
     axes[0].set_title("absolute drift")
     axes[0].grid(True, axis="y", alpha=0.25)
+
     axes[1].bar(x, relative, color=colors)
     axes[1].axhline(0.0, color="black", linewidth=0.8)
     axes[1].set_ylabel("reported relative drift")
     axes[1].set_title("relative drift")
     axes[1].grid(True, axis="y", alpha=0.25)
+
     for ax in axes:
         ax.set_xticks(x)
         ax.set_xticklabels(labels, rotation=35, ha="right", fontsize=8)
-    fig.suptitle("Orszag-Tang total-energy drift")
+
+    fig.suptitle("Orszag-Tang total-energy drift, completed runs only")
     return save_figure(fig, "cleaning_energy_drift.png")
 
 
@@ -407,46 +567,111 @@ def plot_projection_convergence(summaries: pd.DataFrame) -> Path | None:
 
 
 def plot_projection_history() -> Path | None:
-    candidates = [
+    iter_candidates = [
+        "projection_iterations_step",
         "projection_iterations",
-        "projection_iterations_total",
+        "projection_iters",
+    ]
+    residual_candidates = [
+        "projection_true_residual",
         "projection_final_residual",
+        "projection_solver_update_residual",
         "projection_residual",
     ]
-    plotted = False
-    fig, axes = plt.subplots(2, 1, figsize=(8.5, 6.2), sharex=True)
+
+    iter_series = []
+    residual_series = []
+
     for method in METHODS:
         df = load_divergence(method)
         if df is None or "time" not in df.columns:
             continue
-        iter_col = first_column(df, ["projection_iterations", "projection_iters"])
-        res_col = first_column(df, ["projection_final_residual", "projection_residual"])
-        if iter_col is None and res_col is None:
-            continue
+
+        iter_col = first_column(df, iter_candidates)
+        res_col = first_column(df, residual_candidates)
+
         if iter_col is not None:
             t, y = finite_xy(df, "time", iter_col)
+
+            # Important:
+            # Non-projection methods may still have this column, but it is all zero.
+            # Do not plot zero-only series.
+            mask = y > 0.0
+            t = t[mask]
+            y = y[mask]
+
             if not t.empty:
-                axes[0].plot(t, y, label=method_label(method), color=COLORS.get(method))
-                plotted = True
+                iter_series.append((method, t, y))
+
         if res_col is not None:
             t, y = finite_xy(df, "time", res_col)
-            y = y[y > 0.0]
-            t = t.loc[y.index]
+
+            # Only plot meaningful positive residuals.
+            mask = y > 0.0
+            t = t[mask]
+            y = y[mask]
+
             if not t.empty:
-                axes[1].plot(t, y, label=method_label(method), color=COLORS.get(method))
-                axes[1].set_yscale("log")
-                plotted = True
-    if not plotted:
-        plt.close(fig)
-        warn(f"no projection history columns found: {', '.join(candidates)}")
+                residual_series.append((method, t, y))
+
+    if not iter_series and not residual_series:
+        warn(
+            "no projection history columns with finite positive data found: "
+            + ", ".join(iter_candidates + residual_candidates)
+        )
         return None
-    axes[0].set_ylabel("iterations")
-    axes[1].set_ylabel("final residual")
-    axes[1].set_xlabel("time")
-    axes[0].set_title("Projection convergence history")
-    for ax in axes:
-        ax.grid(True, alpha=0.25)
-        ax.legend(fontsize=8)
+
+    # Build only the panels that actually have data.
+    if iter_series and residual_series:
+        fig, axes = plt.subplots(2, 1, figsize=(8.5, 6.2), sharex=True)
+        ax_iter, ax_res = axes
+    elif iter_series:
+        fig, ax_iter = plt.subplots(figsize=(8.5, 4.8))
+        ax_res = None
+    else:
+        fig, ax_res = plt.subplots(figsize=(8.5, 4.8))
+        ax_iter = None
+
+    if ax_iter is not None:
+        for method, t, y in iter_series:
+            ax_iter.plot(
+                t,
+                y,
+                label=method_label(method),
+                color=COLORS.get(method),
+                linewidth=1.8,
+            )
+        ax_iter.set_ylabel("iterations per step")
+        ax_iter.set_title("Projection SOR iterations history")
+        ax_iter.grid(True, alpha=0.25)
+
+        handles, _ = ax_iter.get_legend_handles_labels()
+        if handles:
+            ax_iter.legend(fontsize=8)
+
+    if ax_res is not None:
+        for method, t, y in residual_series:
+            ax_res.plot(
+                t,
+                y,
+                label=method_label(method),
+                color=COLORS.get(method),
+                linewidth=1.8,
+            )
+        ax_res.set_yscale("log")
+        ax_res.set_ylabel("final residual")
+        ax_res.set_xlabel("time")
+        ax_res.set_title("Projection residual history")
+        ax_res.grid(True, alpha=0.25)
+
+        handles, _ = ax_res.get_legend_handles_labels()
+        if handles:
+            ax_res.legend(fontsize=8)
+
+    if ax_iter is not None and ax_res is not None:
+        ax_res.set_xlabel("time")
+        fig.suptitle("Projection convergence history")
+
     return save_figure(fig, "cleaning_projection_convergence_history.png")
 
 
@@ -505,11 +730,7 @@ def write_combined_summary(summaries: pd.DataFrame, failures: pd.DataFrame) -> P
     rows = []
     failure_lookup = {}
     if not failures.empty:
-        f = failures.copy()
-        if "failure_stage" not in f.columns:
-            f["failure_stage"] = f.get("stage", "unknown")
-        if "failure_time" not in f.columns:
-            f["failure_time"] = f.get("time", np.nan)
+        f = compact_first_failures(failures)
         for row in f.itertuples(index=False):
             method = str(getattr(row, "method", ""))
             policy = str(getattr(row, "energy_policy", ""))

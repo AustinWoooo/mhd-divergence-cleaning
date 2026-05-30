@@ -111,13 +111,13 @@ METHODS = {
         "label": "Parabolic",
         "color": "#d62728",
         "ls": ":",
-        "primary": False,
+        "primary": True,
     },
     "elliptic_projection": {
         "label": "Projection",
         "color": "#9467bd",
         "ls": "-",
-        "primary": False,
+        "primary": True,
     },
     "powell_source": {
         "label": "Powell",
@@ -166,6 +166,7 @@ LINESTYLES = {name: spec["ls"] for name, spec in METHODS.items()}
 DIVERG_DIR   = Path("results/mhd_runner/divergence")
 SNAPSHOT_DIR = Path("results/mhd_runner/snapshots")
 FIGURES_DIR  = Path("figures/mhd_runner")
+CONVERGENCE_DIR = Path("results/mhd_runner/convergence")
 
 
 # ---------------------------------------------------------------------------
@@ -607,6 +608,87 @@ def write_summary_csv(output_name: str = "mhd_runner_summary.csv"):
     print(f"  Wrote → {out}")
 
 
+def plot_field_loop_convergence():
+    path = CONVERGENCE_DIR / "field_loop_convergence.csv"
+    if not path.exists():
+        print(f"  warning: missing {path}; run scripts/run_field_loop_convergence.py")
+        return
+
+    df = pd.read_csv(path)
+    required = {"reconstruction", "dx", "l2_B_vector", "estimated_slope"}
+    if not required.issubset(df.columns):
+        print(f"  warning: {path} lacks convergence columns")
+        return
+
+    fig, ax = plt.subplots(figsize=(7.2, 5.0))
+    for reconstruction, group in df.groupby("reconstruction"):
+        group = group.sort_values("dx")
+        slope = float(group["estimated_slope"].iloc[0])
+        ax.loglog(
+            group["dx"],
+            group["l2_B_vector"],
+            marker="o",
+            lw=1.8,
+            label=f"{reconstruction.upper()} slope={slope:.2f}",
+        )
+    ax.invert_xaxis()
+    ax.set_xlabel("dx")
+    ax.set_ylabel(r"$L_2$ error in $(B_x,B_y)$")
+    ax.set_title("Field-loop advection convergence")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    plt.tight_layout()
+
+    out = FIGURES_DIR / "field_loop_convergence.png"
+    plt.savefig(out, dpi=220, bbox_inches="tight")
+    print(f"  Saved → {out}")
+    plt.close()
+
+
+def plot_pcm_vs_plm_hrsc():
+    fig, ax = plt.subplots(figsize=(7.4, 4.8))
+    styles = {"pcm": ("#d62728", "--"), "plm": ("#2ca02c", "-")}
+    cleaning = "mixed_glm"
+    plotted = 0
+    for reconstruction in ("pcm", "plm"):
+        prefix = f"mhd_fl_conv_{reconstruction}_n128"
+        path = DIVERG_DIR / f"{prefix}_{cleaning}.csv"
+        if not path.exists():
+            print(f"  warning: missing {path}; run scripts/run_field_loop_convergence.py")
+            continue
+        df = pd.read_csv(path)
+        ycol = first_existing_column(df, ["L2_norm_fv", "L2_fv"])
+        if ycol is None:
+            print(f"  warning: {path} lacks divB L2 columns")
+            continue
+        color, ls = styles[reconstruction]
+        ax.semilogy(
+            df["time"],
+            df[ycol],
+            color=color,
+            ls=ls,
+            lw=2.0,
+            label=reconstruction.upper(),
+        )
+        plotted += 1
+
+    if plotted == 0:
+        plt.close()
+        return
+
+    ax.set_xlabel("time")
+    ax.set_ylabel(r"$L_2$ normalized FV $\nabla\!\cdot\!\mathbf{B}$")
+    ax.set_title("Field-loop PCM vs PLM reconstruction")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    plt.tight_layout()
+
+    out = FIGURES_DIR / "pcm_vs_plm_divB.png"
+    plt.savefig(out, dpi=220, bbox_inches="tight")
+    print(f"  Saved → {out}")
+    plt.close()
+
+
 # ---------------------------------------------------------------------------
 #  Figure 1  — Orszag-Tang: divB evolution
 # ---------------------------------------------------------------------------
@@ -815,6 +897,10 @@ def main():
         r"Minimum pressure",
     )
     write_summary_csv()
+
+    print("\n=== Accuracy evidence ===")
+    plot_field_loop_convergence()
+    plot_pcm_vs_plm_hrsc()
 
     print("\nDone.")
 

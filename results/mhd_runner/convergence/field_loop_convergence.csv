@@ -1,0 +1,9 @@
+reconstruction,N,dx,tfinal,l2_B_vector,l2_Bmag,estimated_slope,snapshot
+pcm,32,0.03125,0.5,0.00025283181330923546,0.0002527134327342032,0.28432583809432516,results/mhd_runner/snapshots/mhd_fl_conv_pcm_n32_mixed_glm_final.csv
+pcm,64,0.015625,0.5,0.0002209871216879726,0.0002208718012937454,0.28432583809432516,results/mhd_runner/snapshots/mhd_fl_conv_pcm_n64_mixed_glm_final.csv
+pcm,128,0.0078125,0.5,0.00018232536194895076,0.00018210069311655995,0.28432583809432516,results/mhd_runner/snapshots/mhd_fl_conv_pcm_n128_mixed_glm_final.csv
+pcm,256,0.00390625,0.5,0.00013975574201809023,0.00013951295883991995,0.28432583809432516,results/mhd_runner/snapshots/mhd_fl_conv_pcm_n256_mixed_glm_final.csv
+plm,32,0.03125,0.5,0.0002234557065147651,0.00022014306928392678,0.35433336646117364,results/mhd_runner/snapshots/mhd_fl_conv_plm_n32_mixed_glm_final.csv
+plm,64,0.015625,0.5,0.0001824646862128247,0.0001769669993255123,0.35433336646117364,results/mhd_runner/snapshots/mhd_fl_conv_plm_n64_mixed_glm_final.csv
+plm,128,0.0078125,0.5,0.00014206193660405567,0.00013769667314852564,0.35433336646117364,results/mhd_runner/snapshots/mhd_fl_conv_plm_n128_mixed_glm_final.csv
+plm,256,0.00390625,0.5,0.00010712115385207464,0.00010453398234845926,0.35433336646117364,results/mhd_runner/snapshots/mhd_fl_conv_plm_n256_mixed_glm_final.csv

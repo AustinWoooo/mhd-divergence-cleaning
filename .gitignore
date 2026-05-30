@@ -39,3 +39,19 @@ results/mhd_runner/summaries/mhd_fl_conv_*_summary.csv
 .venv/
 *~
 .DS_Store
+# Root CMake/CTest files from accidental in-source configure
+CTestTestfile.cmake
+DartConfiguration.tcl
+Testing/
+
+# Generated dependency graphs
+*.dot
+file_dependencies*.png
+link_dependencies*.png
+project_deps*.png
+project_deps*.dot
+
+# Local tool/editor metadata
+.claude/
+.agents/
+.codex/

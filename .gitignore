@@ -29,6 +29,9 @@ results/mhd_runner/*/mpi_*.csv
 results/mhd_runner/*/mpi_smoke_*.csv
 results/mhd_runner/*/mpi_ot_full_*.csv
 results/mhd_runner/*/mpi_otfull_*.csv
+results/mhd_runner/divergence/perf_*.csv
+results/mhd_runner/summaries/perf_*_summary.csv
+results/mhd_runner/snapshots/perf_*_final.csv
 results/mhd_runner/divergence/mhd_fl_conv_*.csv
 results/mhd_runner/snapshots/mhd_fl_conv_*_final.csv
 results/mhd_runner/summaries/mhd_fl_conv_*_summary.csv

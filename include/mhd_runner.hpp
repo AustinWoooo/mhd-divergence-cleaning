@@ -38,6 +38,21 @@ struct MHDRunParams {
     // to first-order Godunov for comparison/debugging.
     MHD::Reconstruction reconstruction = MHD::Reconstruction::PLM;
     MHD::SlopeLimiter   limiter        = MHD::SlopeLimiter::MC;
+
+    // Root directory for runner-generated CSV outputs.  The default preserves the
+    // historical output layout:
+    //   results/mhd_runner/{divergence,snapshots,summaries,failures}
+    std::string output_root = "results/mhd_runner";
+
+    // Write time-history diagnostics every N accepted steps.  Step 0, the final
+    // step, and failure rows are always written.  Use values > 1 for benchmarks to
+    // reduce I/O without changing the numerical update.
+    int diagnostic_stride = 1;
+
+    // Benchmark-oriented mode flag used by CLIs/scripts.  The solver does not
+    // change physics based on this flag; callers use it to select sparse
+    // diagnostics and disabled snapshots.
+    bool performance_mode = false;
 };
 
 void initialize_orszag_tang_2d(

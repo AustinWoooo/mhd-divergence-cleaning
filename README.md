@@ -1,327 +1,413 @@
-# MHD Divergence Cleaning — 2D Test Suite
+# MHD Divergence Cleaning - 2D Final Project
 
-This repository contains a 2D finite-volume ideal-MHD solver using an HLLD
-Riemann solver, together with several divergence-control methods for studying
-numerical violations of
+This repository is a 2D finite-volume ideal-MHD project for studying numerical
+violations of
 
-\[
-\nabla \cdot \mathbf{B} = 0.
-\]
-
-The current integrated runner applies the divergence-control update outside the
-core HLLD flux kernel. The HLLD solver is kept as a pure ideal-MHD flux kernel.
-The GLM-family updates are therefore operator-split from the ideal-MHD flux
-update in the integrated runner.
-
-## Numerical scheme
-
-The integrated runner uses a second-order **high-resolution shock-capturing
-(HRSC)** scheme built around the HLLD flux:
-
-- **Spatial reconstruction** — piecewise-linear MUSCL reconstruction of the
-  primitive variables to the cell faces, with a TVD slope limiter
-  (`minmod`, `vanleer`, or `mc`; default `mc`). Because every limiter is TVD,
-  reconstructed face density and pressure stay positive whenever the cell
-  averages are positive. Falling back to `pcm` recovers the first-order Godunov
-  scheme for comparison. See [`include/mhd_reconstruction.hpp`](include/mhd_reconstruction.hpp).
-- **Riemann solver** — HLLD (Miyoshi & Kusano 2005), with a Local
-  Lax-Friedrichs (LLF) positivity fallback. On faces flagged by the positivity
-  limiter the scheme drops to first-order states with the diffusive LLF flux.
-  The HLLD kernel also guards near-degenerate star-state denominators with
-  relative-tolerance checks; there is not currently a separate nonfinite
-  star-state retry inside `MHD::compute_flux`.
-- **Time integration** — SSP-RK2 (Heun), with a dual-energy formalism for the
-  low-beta cold cores.
-
----
-
-## Build
-
-```bash
-rm -rf build
-cmake -S . -B build
-cmake --build build -j
+```text
+div B = 0
 ```
 
-Run the registered tests with:
+It implements and compares divergence-control methods on full 2D MHD test
+problems.  The solver does **not** use constrained transport.  The production
+path is an operator-split MHD runner:
 
-```bash
-ctest --test-dir build -N
-ctest --test-dir build --output-on-failure
+```text
+HLLD/LLF hydro update -> divergence cleaning -> diagnostics -> CSV -> figures
 ```
 
----
+The main scientific comparisons are no cleaning, hyperbolic/mixed GLM, mixed
+EGLM, GI mixed EGLM, parabolic cleaning, elliptic projection, and Powell-type
+source variants.  The base MHD update uses HLLD fluxes, a positivity fallback to
+LLF, MUSCL/PLM reconstruction, TVD limiters, and RK2 time integration.
 
-## Executables
+## Architecture
 
-| Executable | Description |
-|---|---|
-| `test_hlld_primitive_recovery` | Tests raw vs checked primitive recovery and verifies that raw pressure is not silently floored |
-| `test_mhd_reconstruction` | Unit tests for the MUSCL slope limiters: linear exactness, extremum clipping, and bounded (positivity-preserving) face values |
-| `test_cleaning_plugins` | Tests the experimental cleaning-plugin prototype and GLM flux wrapper; this path is not used by the production runner |
-| `test_mhd_runner` | Integrated 2D HLLD + divergence-control runner |
-| `test_glm_2d` | Standalone 2D GLM cleaning test on a divergence pulse |
-| `test_glm_1d` | Standalone 1D GLM cleaning test |
+Core state and primitive variables:
 
----
+- `include/state.hpp` defines the conserved state layout:
+  `rho, mx, my, mz, Bx, By, Bz, E, psi`.
+- `include/HLLD_mhd_solver.hpp` declares primitive recovery and the HLLD/LLF
+  flux interface.
+- `src/hlld_solver.cpp` implements primitive/conserved conversion, HLLD, and
+  LLF fluxes.
 
-## Cleaning plugin status
+Hydro update and HRSC reconstruction:
 
-The cleaning-plugin interface is currently an **experimental prototype**, not the
-main production architecture. It is kept to test whether divergence-control methods
-can eventually be wrapped behind a common interface, but the integrated
-`test_mhd_runner` executable does not use this plugin system to choose or apply
-cleaning methods.
+- `include/mhd_reconstruction.hpp` implements PCM/PLM reconstruction and the
+  `minmod`, `vanleer`, and `mc` TVD slope limiters.
+- `src/mhd_runner.cpp` contains the full 2D MHD runner: CFL calculation,
+  RK2 HLLD update, LLF positivity fallback, dual-energy recovery, cleaning
+  dispatch, diagnostics, snapshots, summaries, and performance timing.
+- `include/mhd_runner.hpp` exposes the runner parameters and problem
+  initialization functions.
 
-The production runner currently uses the `CleaningType` enum and the integrated
-runner / `advance_glm_2d_one_step()` dispatch path. This keeps the final-project
-workflow explicit and reproducible while the supported method set is still fixed.
-Future work may either promote the prototype into a formal method registry or move
-it out of the main workflow if no plugin-driven runner is needed.
+Divergence cleaning:
 
----
+- `src/glm2d.cpp` dispatches `CleaningType` values.
+- `src/hyperbolic_glm2d.cpp` implements hyperbolic GLM.
+- `src/mixed_glm2d.cpp` implements mixed GLM damping.
+- `src/eglm2d.cpp` and `src/galilean_glm2d.cpp` implement EGLM variants.
+- `src/parabolic2d.cpp` implements explicit parabolic cleaning.
+- `src/projection2d.cpp` implements periodic elliptic projection.
+- `src/powell2d.cpp` and `src/powell_control.cpp` implement Powell source
+  variants and positivity-control diagnostics.
 
-## `test_mhd_runner` — Usage
+Diagnostics and scripts:
 
-```bash
-./build/test_mhd_runner [options] [problem] [cleaning...]
-```
+- `include/glm2d_common.hpp` and `src/glm2d_common.cpp` provide the finite-volume
+  `divB` diagnostic used by the production runner.
+- `scripts/plot_mhd_runner.py` plots standard MHD comparisons.
+- `scripts/run_field_loop_convergence.py` and
+  `scripts/run_divergence_advection_convergence.py` run accuracy evidence cases.
+- `scripts/run_performance_scaling.py` runs the serial wall-clock scaling study.
+- `scripts/check_performance_scaling.py` validates the benchmark CSV and figures.
 
-### Arguments
-
-| Argument | Values | Default |
-|---|---|---|
-| `problem` | `orszag_tang` \| `field_loop` \| `divergence_advection` | `orszag_tang`|
-| `cleaning` | see table below | all available methods |
-| `--reconstruction` | `pcm` (first-order Godunov) \| `plm` (second-order MUSCL HRSC) | `plm` |
-| `--first-order` | alias for `--reconstruction pcm` | — |
-| `--limiter` | `minmod` \| `vanleer` \| `mc` (only used for `plm`) | `mc` |
-| `--nx`, `--ny` | positive integers | problem default |
-| `--tfinal` / `--t-end` | positive final time | problem default |
-| `--output-prefix` | output filename prefix | problem prefix |
-
-### Cleaning / divergence-control method names
-
-Main divergence-control methods:
-
-| Name | Equation / correction | Conservation / splitting | Divergence-error behavior | Expected advantage | Report limitation |
-|---|---|---|---|---|---|
-| `none` | No cleaning; ideal-MHD HLLD update only | Conservative finite-volume update, aside from documented positivity safeguards | Lets numerical divB evolve unchecked | Baseline for every comparison | Not a cleaning method |
-| `hyperbolic_glm` | Dedner B-psi subsystem: `dB/dt + grad(psi)=0`, `dpsi/dt + ch^2 divB=0` | Operator-split; psi energy is not included in conserved energy | Transports divB as waves at cleaning speed `ch` | Local finite-speed correction | Split from HLLD flux in the runner |
-| `mixed_glm` | Hyperbolic GLM plus `psi <- psi exp(-dt ch^2/cp^2)` | Operator-split; psi energy is not included in conserved energy | Transports and damps divB | Usually more robust than pure hyperbolic GLM | Damping is applied as a split scalar decay |
-| `parabolic` | `dB/dt = cp^2 grad(divB)` using the FV divB/gradient pair | Operator-split diffusion update; energy policy is reported in summaries | Diffuses divB | Simple local smoothing of grid-scale divergence | Explicit diffusion is time-step limited |
-| `elliptic_projection` | Periodic Poisson solve `lap(phi)=divB`, then `B <- B - grad(phi)` | Operator-split projection; energy policy and projection relaxation are reported | Projects B toward a discrete divergence-free field | Strongest direct divB reduction | Global solve; relaxed projection is not exact when `theta < 1` |
-| `powell_source` | `dU/dt = -(divB)[0,Bx,By,Bz,ux,uy,uz,u.B,0]^T` | Nonconservative source update | Transports divB errors with the flow rather than directly eliminating them | Can advect divergence out of local structures | Conservation drift and pressure robustness must be reported |
-| `eglm` / `mixed_eglm` | Extended GLM: mixed GLM plus `d(rho u)/dt=-(divB)B`, `dE/dt=-B.grad(psi)` | Operator-split, nonconservative extended-GLM source update | Transports/damps divB and applies EGLM source corrections | Formal GLM-family extension coupling divB to momentum/energy | Intended continuous EGLM convention needs author confirmation |
-| `gi_mixed_eglm` | GI-EGLM: mixed GLM plus `d(rho u)/dt=-(divB)B`, `dB/dt=-(divB)u`, `dE/dt=-(divB)(u.B)-B.grad(psi)`, `dpsi/dt=-u.grad(psi)` | Operator-split, nonconservative extended-GLM source update | Transports/damps divB and applies Galilean-invariant source corrections | Targets frame-invariant extended-GLM behavior | Frame invariance is not proven for the current split update |
-
-Cautionary / robustness-control variants:
-
-| Name | Method | Intended use |
-|---|---|---|
-| `powell_source_subcycled` | Powell source update with source-CFL subcycling | Robustness diagnostic for the explicit Powell source split |
-| `powell_source_limited` | Pressure-limited Powell source update | Positivity-limited nonconservative robustness policy; not exact Powell |
-
-### Notes
-
-- `eglm` is accepted as a CLI alias for the existing public method name `mixed_eglm`; generated output files still use `mixed_eglm` to avoid renaming existing artifacts.
-- `hyperbolic_glm`, `mixed_glm`, `mixed_eglm`, and `gi_mixed_eglm` are implemented as operator-split cleaning/source updates in the integrated runner. The scalar psi field is evolved for cleaning, but psi energy is not included in the conserved total energy.
-- `powell_source` uses nonconservative source terms. It transports divergence errors with the flow rather than eliminating them, so conservation drift and pressure robustness must be diagnosed separately from divB reduction.
-- `mixed_eglm` is treated here as a formal extended-GLM method. The implemented source terms are
-  `d(rho u)/dt = -(div B) B` and `dE/dt = -B . grad(psi)`, applied after the mixed-GLM B-psi update.
-- `gi_mixed_eglm` is treated here as a formal Galilean-invariant extended-GLM method. The implemented source terms are
-  `d(rho u)/dt = -(div B) B`, `dB/dt = -(div B) u`, `dE/dt = -(div B)(u.B) - B.grad(psi)`, and `dpsi/dt = -u.grad(psi)`, applied after the mixed-GLM update.
-- The EGLM/GI-EGLM source terms use the conserved-variable ordering `[rho, rho*ux, rho*uy, rho*uz, Bx, By, Bz, E, psi]`; the code updates the matching momentum, magnetic-field, energy, and psi slots consistently with that ordering.
-- Because GI-EGLM is applied as a split source using the pre-cleaning reference state, the desired Galilean-invariant continuous formulation needs author confirmation at the report level. The current implementation documents the intended source terms but does not prove exact frame invariance of the full operator-split hydro plus cleaning step.
-- The cleaning-plugin interface is currently an **experimental prototype**. It has dedicated tests for the GLM flux wrapper, but the production runner does **not** dispatch through this plugin interface. Production cleaning methods are selected through `CleaningType` and routed through the integrated runner / `advance_glm_2d_one_step()` path.
-
----
-
-## Examples
+## Build And Test
 
 ```bash
-# Default problem and all cleaning methods
-./build/test_mhd_runner
-
-# One problem, all cleaning methods
-./build/test_mhd_runner orszag_tang
-./build/test_mhd_runner field_loop
-./build/test_mhd_runner divergence_advection
-
-# One problem, one cleaning method
-./build/test_mhd_runner orszag_tang hyperbolic_glm
-./build/test_mhd_runner field_loop mixed_glm
-./build/test_mhd_runner divergence_advection mixed_glm
-
-# One problem, multiple selected cleaning methods
-./build/test_mhd_runner orszag_tang none hyperbolic_glm mixed_glm
-./build/test_mhd_runner divergence_advection none hyperbolic_glm mixed_glm
-
-# Scripted resolution/prefix controls
-./build/test_mhd_runner --nx 64 --ny 64 --tfinal 0.5 \
-  --output-prefix mhd_fl_plm_n64 --reconstruction plm field_loop none
-
-# Show help
-./build/test_mhd_runner --help
-```
-
----
-
-## Regenerate Standard Results and Figures
-
-From a fresh build, this regenerates the standard solver outputs and figures
-used by the report:
-
-```bash
-rm -rf build
 cmake -S . -B build
 cmake --build build -j
 ctest --test-dir build --output-on-failure
-
-./build/test_mhd_runner
-./build/test_mhd_runner field_loop \
-  none hyperbolic_glm mixed_glm mixed_eglm gi_mixed_eglm
-./build/test_mhd_runner divergence_advection \
-  none hyperbolic_glm mixed_glm mixed_eglm gi_mixed_eglm \
-  parabolic elliptic_projection
-
-python3 scripts/run_field_loop_convergence.py
-python3 scripts/plot_mhd_runner.py
-python3 scripts/plot_cleaning_diagnostics.py
-python3 scripts/plot_pressure_diagnostics.py
-python3 scripts/plot_glm_1d.py
-python3 scripts/plot_glm_2d.py
 ```
 
-The convergence script writes
-`results/mhd_runner/convergence/field_loop_convergence.csv`,
-`figures/mhd_runner/field_loop_convergence.png`,
-`results/mhd_runner/hrsc/pcm_vs_plm_summary.csv`, and
-`figures/mhd_runner/pcm_vs_plm_divB.png`.
-
-### OpenMP
-
-OpenMP is enabled in the 2D loops used by the expensive flux, CFL, and
-diagnostic work. Control thread count with `OMP_NUM_THREADS`:
-
-```bash
-OMP_NUM_THREADS=4 ./build/test_mhd_runner
-```
-
-The numerical algorithm is unchanged; this is shared-memory loop parallelism on
-a single run, not MPI domain decomposition.
-
----
-
-## Optional MPI Sweep Runner
-
-MPI support is optional and disabled by default. Enable it only when you want to
-run coarse-grained parameter sweeps over independent numerical experiments:
+Optional MPI support is disabled by default:
 
 ```bash
 cmake -S . -B build-mpi -DENABLE_MPI=ON
 cmake --build build-mpi -j
-mpirun -np 2 ./build-mpi/mhd_sweep_mpi --smoke
 ```
 
-`mhd_sweep_mpi` does **not** domain-decompose the MHD grid. Each MPI rank runs
-complete `mhd_runner` cases assigned by job index, so there are no MPI ghost
-cells and no MPI calls inside the hydro update, HLLD flux, or cleaning equations.
-It is useful for parameter sweeps and as a bonus parallel workflow, not for
-strong/weak scaling of one MHD domain.
-The default job list is intentionally small and includes `none`,
-`hyperbolic_glm`, `mixed_glm`, `parabolic`, `elliptic_projection`,
-`powell_source`, `eglm`, and `gi_mixed_eglm`.
+## Executables
 
-Useful options:
+`mhd_runner_cli` is the user-facing full MHD runner:
+
+```bash
+./build/mhd_runner_cli [options] [problem] [cleaning...]
+```
+
+`test_mhd_runner` remains the registered regression/smoke test driver and
+accepts the same benchmark-oriented options.
+
+Useful discovery commands:
+
+```bash
+./build/mhd_runner_cli --list-problems
+./build/mhd_runner_cli --list-methods
+./build/mhd_runner_cli --help
+```
+
+Supported problems:
+
+- `orszag_tang`
+- `field_loop`
+- `divergence_advection`
+
+Supported cleaning names:
+
+- `none`
+- `hyperbolic_glm`
+- `mixed_glm`
+- `parabolic`
+- `elliptic_projection`
+- `powell_source`
+- `powell_source_subcycled`
+- `powell_source_limited`
+- `eglm` / `mixed_eglm`
+- `gi_mixed_eglm`
+
+## Running Science Cases
+
+Default Orszag-Tang comparison with all methods:
+
+```bash
+./build/mhd_runner_cli orszag_tang
+```
+
+Field loop with no cleaning and mixed GLM:
+
+```bash
+./build/mhd_runner_cli field_loop none mixed_glm
+```
+
+Divergence-advection comparison:
+
+```bash
+./build/mhd_runner_cli divergence_advection none mixed_glm mixed_eglm
+```
+
+Run a smaller explicit case:
+
+```bash
+./build/mhd_runner_cli --nx 64 --ny 64 --tfinal 0.1 \
+  --output-prefix mhd_da_n64 divergence_advection none mixed_glm
+```
+
+Select reconstruction:
+
+```bash
+./build/mhd_runner_cli --reconstruction pcm field_loop mixed_glm
+./build/mhd_runner_cli --reconstruction plm --limiter mc field_loop mixed_glm
+```
+
+## Output Structure
+
+Default C++ outputs are rooted at `results/mhd_runner/`:
+
+- `results/mhd_runner/divergence/`
+  Per-step time histories.  Columns include step, time, dt, FV divergence norms,
+  normalized divergence norms, mass, momentum, total energy, minimum pressure,
+  failure flags, cleaning subcycles, projection iterations, and projection
+  residuals.
+- `results/mhd_runner/snapshots/`
+  Final field snapshots with `i,j,x,y,rho,u,v,w,p,Bx,By,Bz,psi,divB_fv,Bmag`.
+- `results/mhd_runner/summaries/`
+  One compact per-run summary CSV.  These now include final physics diagnostics
+  and performance timing columns.
+- `results/mhd_runner/failures/`
+  Bad-state and limiter diagnostic CSVs, when a run triggers them.
+- `results/mhd_runner/performance/`
+  Merged benchmark tables from `scripts/run_performance_scaling.py`.
+
+Figures are written under `figures/mhd_runner/`.
+
+Use `--output-root PATH` to redirect runner CSV output:
+
+```bash
+./build/mhd_runner_cli --output-root /tmp/mhd_outputs divergence_advection mixed_glm
+```
+
+## Benchmark Controls
+
+The runner has benchmark-friendly options:
+
+- `--no-snapshots`
+  disables final snapshot writing.
+- `--diagnostic-stride N`
+  writes diagnostic rows every `N` accepted steps while always preserving step 0,
+  final step, and failure rows.
+- `--performance-mode`
+  disables snapshots and uses sparse diagnostics by default.
+- `--output-root PATH`
+  redirects CSV outputs away from the default result tree.
+
+These controls do not change the numerical update.  They only reduce benchmark
+I/O and organize outputs.
+
+## Performance Scaling
+
+The assignment requires wall-clock scaling versus number of cells.  Use a short
+smoke benchmark only to check the pipeline quickly:
+
+```bash
+python3 scripts/run_performance_scaling.py \
+  --resolutions 32 64 \
+  --methods none mixed_glm \
+  --output-csv results/mhd_runner/performance/performance_scaling_smoke.csv \
+  --skip-build
+```
+
+The core report benchmark keeps the main scaling table and figures focused on
+the baseline and the primary GLM/projection methods:
+
+```bash
+python3 scripts/run_performance_scaling.py \
+  --resolutions 32 64 128 256 \
+  --methods none mixed_glm mixed_eglm elliptic_projection \
+  --reconstruction plm \
+  --limiter vanleer \
+  --skip-build
+```
+
+Core benchmark:
+
+- methods: `none mixed_glm mixed_eglm elliptic_projection`
+- CSV: `results/mhd_runner/performance/performance_scaling.csv`
+- figures: `figures/mhd_runner/performance_*.png` without a method-set suffix
+
+The all-method benchmark includes every supported cleaning method that completes
+successfully.  It writes a separate CSV and uses an `_all_methods` figure suffix,
+so it does not overwrite the core benchmark:
+
+```bash
+python3 scripts/run_performance_scaling.py \
+  --resolutions 32 64 128 256 \
+  --methods none parabolic hyperbolic_glm mixed_glm mixed_eglm gi_mixed_eglm \
+    elliptic_projection powell_source powell_source_limited powell_source_subcycled \
+  --reconstruction plm \
+  --limiter vanleer \
+  --output-csv results/mhd_runner/performance/performance_scaling_all_methods.csv \
+  --figure-suffix all_methods \
+  --continue-on-failure \
+  --skip-build
+```
+
+All-method benchmark:
+
+- methods: all supported cleaning methods except the duplicate `eglm` alias for
+  `mixed_eglm`
+- CSV: `results/mhd_runner/performance/performance_scaling_all_methods.csv`
+- figures: `figures/mhd_runner/performance_*_all_methods.png`
+- per-resolution breakdown figures:
+  `figures/mhd_runner/performance_method_breakdown_all_methods_*.png`
+- normalized per-resolution breakdown figures:
+  `figures/mhd_runner/performance_method_breakdown_normalized_all_methods_*.png`
+- use: comprehensive method comparison; the combined plots can be crowded, so
+  the fixed-resolution breakdown plots are usually easier to read
+
+Defaults:
+
+- problem: `divergence_advection`
+- resolutions: `32 64 128 256`
+- methods: `none mixed_glm mixed_eglm elliptic_projection`
+- reconstruction: `plm`
+- limiter: `mc` unless overridden; the report command above uses `vanleer`
+- final time: `0.05`
+- diagnostic stride: `100`
+
+The script builds `mhd_runner_cli` unless `--skip-build` is passed, runs each
+case in performance mode, reads the generated per-case summary CSVs, and writes
+the full report benchmark to:
+
+```text
+results/mhd_runner/performance/performance_scaling.csv
+```
+
+Smoke runs should use a separate output path such as:
+
+```text
+results/mhd_runner/performance/performance_scaling_smoke.csv
+```
+
+Benchmark figures:
+
+```text
+figures/mhd_runner/performance_walltime_vs_cells.png
+figures/mhd_runner/performance_cell_updates_per_second.png
+figures/mhd_runner/performance_seconds_per_step.png
+figures/mhd_runner/performance_method_breakdown.png
+figures/mhd_runner/performance_method_breakdown_32.png
+figures/mhd_runner/performance_method_breakdown_64.png
+figures/mhd_runner/performance_method_breakdown_128.png
+figures/mhd_runner/performance_method_breakdown_256.png
+figures/mhd_runner/performance_method_breakdown_normalized.png
+figures/mhd_runner/performance_method_breakdown_normalized_32.png
+figures/mhd_runner/performance_method_breakdown_normalized_64.png
+figures/mhd_runner/performance_method_breakdown_normalized_128.png
+figures/mhd_runner/performance_method_breakdown_normalized_256.png
+figures/mhd_runner/performance_cleaning_overhead_fraction.png
+```
+
+The overall method-breakdown plot shows every benchmark run together.  The
+per-resolution breakdown plots show the same hydro, cleaning, and
+diagnostics/output timing stack at a fixed grid size, which is cleaner for
+method-to-method comparisons.  Absolute breakdown plots show real wall-clock
+cost in seconds.  Normalized breakdown plots show the fraction of measured time
+spent in hydro, cleaning, and diagnostics/output, which is useful when one
+method, such as elliptic projection, dominates the absolute-time scale.
+
+Validate the benchmark output with:
+
+```bash
+python3 scripts/check_performance_scaling.py \
+  results/mhd_runner/performance/performance_scaling.csv
+```
+
+Performance CSV schema:
+
+```text
+problem,method,reconstruction,limiter,nx,ny,ncell,tfinal,steps,status,
+total_wall_time_sec,initialization_time_sec,hydro_time_sec,cleaning_time_sec,
+diagnostics_compute_time_sec,diagnostics_write_time_sec,snapshot_write_time_sec,
+summary_write_time_sec,output_time_sec,total_cell_updates,seconds_per_step,
+cell_updates_per_second,cleaning_subcycles_total,projection_iterations_total,
+final_L2_norm_fv,final_Linf_norm_fv,min_pressure,min_density,energy_drift,
+failure_reason,summary_file,diagnostic_file
+```
+
+`cell_updates_per_second` is computed as:
+
+```text
+nx * ny * steps / total_wall_time_sec
+```
+
+Timing categories are measured with `std::chrono::steady_clock`.  The hydro
+category includes the RK2 HLLD/LLF finite-volume update.  The cleaning category
+measures the end-of-step cleaning update.  If `--project-each-stage` is used,
+the optional predictor-stage projection occurs inside the RK2 function and is
+therefore counted with hydro time; the default benchmark workflow does not use
+stage projection.
+
+Snapshots are disabled during performance runs because full-field snapshot I/O
+can dominate wall time and obscure solver scaling.  Sparse diagnostics preserve
+the initial/final correctness checks while avoiding dense CSV output.
+
+Powell variants (`powell_source`, `powell_source_limited`,
+`powell_source_subcycled`) are useful stability and diagnostic experiments, but
+they are not forced into the main report scaling plot unless they remain stable
+for the selected problem and resolution range.
+
+## Python Figure Workflow
+
+Standard science figures:
+
+```bash
+./build/mhd_runner_cli
+./build/mhd_runner_cli field_loop none hyperbolic_glm mixed_glm mixed_eglm gi_mixed_eglm
+./build/mhd_runner_cli divergence_advection none hyperbolic_glm mixed_glm mixed_eglm gi_mixed_eglm
+python3 scripts/plot_mhd_runner.py
+```
+
+Accuracy and HRSC evidence:
+
+```bash
+python3 scripts/run_field_loop_convergence.py
+python3 scripts/run_divergence_advection_convergence.py
+```
+
+Additional cleaning/pressure diagnostics:
+
+```bash
+python3 scripts/plot_cleaning_diagnostics.py
+python3 scripts/plot_pressure_diagnostics.py
+```
+
+## Optional MPI Sweep
+
+`mhd_sweep_mpi` is optional coarse-grained task parallelism over independent
+runner cases.  It is not domain decomposition and is not the primary serial
+wall-clock scaling measurement.
 
 ```bash
 mpirun -np 4 ./build-mpi/mhd_sweep_mpi \
   --problem divergence_advection \
-  --nx 32 --ny 32 --t-end 0.02 --cfl 0.4 \
+  --nx 32 --ny 32 --t-end 0.02 \
   --methods none,mixed_glm,eglm,gi_mixed_eglm \
   --prefix mpi_da
 ```
 
-Rank-local sweep summaries are written to
-`results/mhd_sweep_mpi/summaries/summary_rank_*.csv`. Individual solver outputs
-still go through `results/mhd_runner/` with unique prefixes, avoiding concurrent
-writes to the same result file. Merge rank summaries with:
-
-```bash
-python scripts/merge_mpi_sweep_summaries.py
-```
-
-Full domain-decomposed MPI is future work. In particular, local finite-volume
-updates would need ghost-cell exchange, while `elliptic_projection` would need a
-parallel/global Poisson solve or a different projection strategy.
-
----
-
-## Output
-
-Results are written to `results/mhd_runner/`:
+Rank-local summaries are written to:
 
 ```text
-results/mhd_runner/
-├── divergence/          # divB norm history, one CSV per run
-│   ├── mhd_ot_none.csv
-│   ├── mhd_ot_mixed_glm.csv
-│   └── ...
-├── snapshots/           # final field snapshots, one CSV per run
-│   ├── mhd_ot_none_final.csv
-│   ├── mhd_ot_mixed_glm_final.csv
-│   └── ...
-└── summaries/           # run summaries and failure diagnostics, when available
-    ├── mhd_ot_parabolic_summary.csv
-    └── ...
+results/mhd_sweep_mpi/summaries/summary_rank_*.csv
 ```
 
-Filename prefixes:
+Merge them with:
 
-| Problem | Prefix |
-|---|---|
-| Orszag-Tang vortex | `mhd_ot` |
-| Field-loop advection | `mhd_fl` |
-| Divergence advection | `mhd_da` |
+```bash
+python3 scripts/merge_mpi_sweep_summaries.py
+```
 
-Generated `results/` files are reproducibility artifacts. Do not commit regenerated
-CSVs unless they are intentionally curated for the final report. Use finite-volume
-normalized divergence diagnostics (`L1_norm_fv`, `L2_norm_fv`, `Linf_norm_fv`) as
-the main comparison metrics. Centered-difference divB diagnostics are retained as
-secondary/internal checks for the standalone cleaning demos.
+## Assignment Checklist
 
-Accuracy evidence is written to `results/mhd_runner/convergence/` and
-`figures/mhd_runner/`. The field-loop convergence script compares PCM
-first-order reconstruction with PLM/MUSCL reconstruction against the periodic
-exact shift of the initial loop and records the measured slopes. The same script
-also writes a direct PCM-vs-PLM field-loop divergence-history figure, supporting
-the HRSC reconstruction claim without changing the solver architecture.
-
-Future improvement: update the GLM cleaning speed `ch` dynamically from the
-current maximum signal speed each step. The current runner preserves the
-historical behavior and freezes `ch` at the initial maximum signal speed.
-
----
-
-## Supported Problems
-
-### Orszag-Tang Vortex
-
-- Smooth, periodic, fully 2D MHD vortex problem
-- Parameters: γ = 5/3, t_end = 0.5, N = 128
-- Useful for comparing robustness and divergence growth in a nonlinear MHD flow
-
-### Field-Loop Advection
-
-- Weak localized magnetic loop advected across a periodic domain
-- Parameters: γ = 5/3, t_end = 0.5, N = 128
-- Background state: ρ = 1, p = 1, u = 1, v = 1
-- Normalized divergence diagnostics should be interpreted carefully where \(|B|\) is close to zero
-
-### Divergence Advection
-
-- Controlled non-solenoidal magnetic perturbation advected by a background flow
-- Parameters: γ = 5/3, t_end = 0.5, N = 128
-- Background state: ρ = 1, p = 1, u = 1, v = 0.5
-- Useful for checking whether divergence errors are transported, damped, projected, or diffused
+- 2D MHD divergence cleaning implemented: yes, through the integrated
+  `CleaningType` and `glm2d` runner path.
+- Divergence errors compared with and without correction: yes, through
+  `none` versus GLM/EGLM/projection/Powell-type methods.
+- No constrained transport: yes.  The code uses divergence cleaning/projection
+  methods, not CT.
+- Applied to MHD test problems: yes, Orszag-Tang, field loop, and divergence
+  advection.
+- Performance scaling measured: yes, via
+  `scripts/run_performance_scaling.py`.
+- HRSC bonus: yes, HLLD fluxes with PLM/MUSCL reconstruction, TVD limiters,
+  RK2, and LLF positivity fallback.

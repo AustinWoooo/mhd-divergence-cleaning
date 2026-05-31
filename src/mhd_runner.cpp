@@ -14,6 +14,7 @@
 #include "mhd_runner.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -33,6 +34,8 @@
 
 namespace fs = std::filesystem;
 using namespace MHD;
+
+using Clock = std::chrono::steady_clock;
 
 namespace {
 
@@ -138,6 +141,92 @@ struct CleaningAdvanceStats {
     double powell_limited_theta_sum = 0.0;
     long long powell_limited_activations = 0;
 };
+
+struct MHDRunTiming {
+    double total_wall_time_sec = 0.0;
+    double initialization_time_sec = 0.0;
+    double hydro_time_sec = 0.0;
+    double cleaning_time_sec = 0.0;
+    double diagnostics_compute_time_sec = 0.0;
+    double diagnostics_write_time_sec = 0.0;
+    double snapshot_write_time_sec = 0.0;
+    double summary_write_time_sec = 0.0;
+    double output_time_sec = 0.0;
+    long long steps = 0;
+    long long total_cell_updates = 0;
+    double seconds_per_step = 0.0;
+    double cell_updates_per_second = 0.0;
+};
+
+double seconds_since(Clock::time_point start) {
+    return std::chrono::duration<double>(Clock::now() - start).count();
+}
+
+void finalize_timing_fields(
+    MHDRunTiming& timing,
+    int nx,
+    int ny
+) {
+    timing.total_cell_updates =
+        static_cast<long long>(nx) * static_cast<long long>(ny) * timing.steps;
+    timing.output_time_sec =
+        timing.diagnostics_write_time_sec
+      + timing.snapshot_write_time_sec
+      + timing.summary_write_time_sec;
+    timing.seconds_per_step =
+        (timing.steps > 0)
+        ? timing.total_wall_time_sec / static_cast<double>(timing.steps)
+        : 0.0;
+    timing.cell_updates_per_second =
+        (timing.total_wall_time_sec > 0.0)
+        ? static_cast<double>(timing.total_cell_updates)
+            / timing.total_wall_time_sec
+        : 0.0;
+}
+
+fs::path runner_output_path(
+    const MHDRunParams& params,
+    const std::string& subdir,
+    const std::string& filename
+) {
+    return fs::path(params.output_root) / subdir / filename;
+}
+
+bool should_write_diagnostic_row(
+    int step,
+    double time,
+    double t_end,
+    bool failure,
+    int stride
+) {
+    if (step == 0 || failure || time >= t_end - 1.0e-12) {
+        return true;
+    }
+    const int s = std::max(1, stride);
+    return step % s == 0;
+}
+
+std::string reconstruction_name(MHD::Reconstruction reconstruction) {
+    switch (reconstruction) {
+        case MHD::Reconstruction::PCM:
+            return "pcm";
+        case MHD::Reconstruction::PLM:
+            return "plm";
+    }
+    return "unknown";
+}
+
+std::string limiter_name(MHD::SlopeLimiter limiter) {
+    switch (limiter) {
+        case MHD::SlopeLimiter::MINMOD:
+            return "minmod";
+        case MHD::SlopeLimiter::VANLEER:
+            return "vanleer";
+        case MHD::SlopeLimiter::MC:
+            return "mc";
+    }
+    return "unknown";
+}
 
 std::string cleaning_energy_policy_name(CleaningEnergyPolicy policy) {
     switch (policy) {
@@ -365,13 +454,16 @@ void write_cleaning_failure_csv(
     double min_dt_used
 ) {
     const std::string filename =
-        "results/mhd_runner/failures/"
-      + params.glm.out_prefix
-      + "_"
-      + method
-      + "_"
-      + cleaning_energy_policy_name(params.glm.energy_policy)
-      + "_failure.csv";
+        runner_output_path(
+            params,
+            "failures",
+            params.glm.out_prefix
+          + "_"
+          + method
+          + "_"
+          + cleaning_energy_policy_name(params.glm.energy_policy)
+          + "_failure.csv"
+        ).string();
     ensure_parent_directory(filename);
 
     std::ofstream fout(filename);
@@ -448,11 +540,14 @@ void write_powell_first_bad_cell_diagnostic(
     double divB
 ) {
     const std::string filename =
-        "results/mhd_runner/failures/"
-      + params.glm.out_prefix
-      + "_"
-      + method_name
-      + "_first_bad_cell_diagnostic.csv";
+        runner_output_path(
+            params,
+            "failures",
+            params.glm.out_prefix
+          + "_"
+          + method_name
+          + "_first_bad_cell_diagnostic.csv"
+        ).string();
 
     ensure_parent_directory(filename);
 
@@ -515,11 +610,14 @@ std::string powell_limited_limiter_stats_filename(
     const MHDRunParams& params,
     const std::string& method_name
 ) {
-    return "results/mhd_runner/failures/"
-      + params.glm.out_prefix
+    return runner_output_path(
+        params,
+        "failures",
+        params.glm.out_prefix
       + "_"
       + method_name
-      + "_limiter_stats.csv";
+      + "_limiter_stats.csv"
+    ).string();
 }
 
 void initialize_powell_limited_limiter_stats_csv(
@@ -591,11 +689,14 @@ void write_powell_limited_first_limited_cell_diagnostic(
     double theta
 ) {
     const std::string filename =
-        "results/mhd_runner/failures/"
-      + params.glm.out_prefix
-      + "_"
-      + method_name
-      + "_first_limited_cell.csv";
+        runner_output_path(
+            params,
+            "failures",
+            params.glm.out_prefix
+          + "_"
+          + method_name
+          + "_first_limited_cell.csv"
+        ).string();
 
     ensure_parent_directory(filename);
 
@@ -1808,14 +1909,15 @@ void write_mhd_run_summary(
     int powell_limited_max_cells_per_step,
     double powell_limited_theta_min_global,
     double powell_limited_theta_mean,
-    long long powell_limited_total_activations
+    long long powell_limited_total_activations,
+    const MHDRunTiming& timing
 ) {
     const std::string filename =
-        "results/mhd_runner/summaries/"
-      + params.glm.out_prefix
-      + "_"
-      + method
-      + "_summary.csv";
+        runner_output_path(
+            params,
+            "summaries",
+            params.glm.out_prefix + "_" + method + "_summary.csv"
+        ).string();
 
     ensure_parent_directory(filename);
 
@@ -1849,7 +1951,22 @@ void write_mhd_run_summary(
         << "powell_limited_max_cells_per_step,"
         << "powell_limited_theta_min_global,"
         << "powell_limited_theta_mean,"
-        << "powell_limited_total_activations\n";
+        << "powell_limited_total_activations,"
+        << "total_wall_time_sec,"
+        << "initialization_time_sec,"
+        << "hydro_time_sec,"
+        << "cleaning_time_sec,"
+        << "diagnostics_compute_time_sec,"
+        << "diagnostics_write_time_sec,"
+        << "snapshot_write_time_sec,"
+        << "summary_write_time_sec,"
+        << "output_time_sec,"
+        << "steps,"
+        << "total_cell_updates,"
+        << "seconds_per_step,"
+        << "cell_updates_per_second,"
+        << "nx,ny,ncell,reconstruction,limiter,diagnostic_stride,"
+        << "performance_mode\n";
 
     const std::string fs_name =
         stage_mins.failure_stage.empty()
@@ -1896,7 +2013,27 @@ void write_mhd_run_summary(
         << powell_limited_max_cells_per_step << ","
         << powell_limited_theta_min_global << ","
         << powell_limited_theta_mean << ","
-        << powell_limited_total_activations;
+        << powell_limited_total_activations << ","
+        << timing.total_wall_time_sec << ","
+        << timing.initialization_time_sec << ","
+        << timing.hydro_time_sec << ","
+        << timing.cleaning_time_sec << ","
+        << timing.diagnostics_compute_time_sec << ","
+        << timing.diagnostics_write_time_sec << ","
+        << timing.snapshot_write_time_sec << ","
+        << timing.summary_write_time_sec << ","
+        << timing.output_time_sec << ","
+        << timing.steps << ","
+        << timing.total_cell_updates << ","
+        << timing.seconds_per_step << ","
+        << timing.cell_updates_per_second << ","
+        << params.glm.nx << ","
+        << params.glm.ny << ","
+        << static_cast<long long>(params.glm.nx) * params.glm.ny << ","
+        << reconstruction_name(params.reconstruction) << ","
+        << limiter_name(params.limiter) << ","
+        << std::max(1, params.diagnostic_stride) << ","
+        << (params.performance_mode ? 1 : 0);
     out << "\n";
 }
 
@@ -2052,6 +2189,11 @@ void run_mhd_2d_case(
     CleaningType type,
     MHDRunParams params
 ) {
+    const auto run_start = Clock::now();
+    const auto init_start = Clock::now();
+
+    params.diagnostic_stride = std::max(1, params.diagnostic_stride);
+
     // Derive grid spacing from domain size and resolution.
     params.glm.dx = params.glm.xlen / static_cast<double>(params.glm.nx);
     params.glm.dy = params.glm.ylen / static_cast<double>(params.glm.ny);
@@ -2097,41 +2239,60 @@ void run_mhd_2d_case(
     const std::string name   = cleaning_name(type);
     const std::string prefix = params.glm.out_prefix;
 
-    fs::create_directories("results/mhd_runner/divergence");
-    fs::create_directories("results/mhd_runner/snapshots");
-    fs::create_directories("results/mhd_runner/summaries");
+    MHDRunTiming timing;
+    timing.initialization_time_sec += seconds_since(init_start);
 
+    fs::create_directories(fs::path(params.output_root) / "divergence");
+    fs::create_directories(fs::path(params.output_root) / "snapshots");
+    fs::create_directories(fs::path(params.output_root) / "summaries");
+
+    const auto initial_diag_start = Clock::now();
     const MHDRunDiagnostics initial_diag =
         compute_mhd_run_diagnostics(U, gamma, dx * dy);
+    timing.diagnostics_compute_time_sec += seconds_since(initial_diag_start);
     const double energy_initial = initial_diag.total_energy;
 
     // Initial snapshot (optional).
     if (params.glm.write_snapshot && params.glm.write_initial_snapshot) {
         const std::string snap =
-            "results/mhd_runner/snapshots/" + prefix + "_" + name + "_initial.csv";
+            runner_output_path(
+                params,
+                "snapshots",
+                prefix + "_" + name + "_initial.csv"
+            ).string();
+        const auto snapshot_start = Clock::now();
         write_mhd_2d_snapshot(U, params, snap);
+        timing.snapshot_write_time_sec += seconds_since(snapshot_start);
         std::cout << "  Wrote " << snap << "\n";
     }
 
     // Diagnostics CSV.
     const std::string diag_name =
-        "results/mhd_runner/divergence/" + prefix + "_" + name + ".csv";
+        runner_output_path(
+            params,
+            "divergence",
+            prefix + "_" + name + ".csv"
+        ).string();
     std::ofstream diag(diag_name);
     if (!diag) {
         throw std::runtime_error("Failed to open diagnostic file: " + diag_name);
     }
-    diag << "step,time,dt,"
-         << "L1_fv,L2_fv,Linf_fv,"
-         << "L1_norm_fv,L2_norm_fv,Linf_norm_fv,"
-         << "total_mass,total_momentum_x,total_momentum_y,total_momentum_z,"
-         << "total_energy,min_density,min_pressure,"
-         << "has_nonfinite,has_negative_density,has_negative_pressure,"
-         << "cleaning_subcycles_step,"
-         << "projection_iterations_step,"
-         << "projection_solver_update_residual,"
-         << "projection_final_residual,"
-         << "projection_true_residual,"
-         << "projection_converged\n";
+    {
+        const auto diag_write_start = Clock::now();
+        diag << "step,time,dt,"
+             << "L1_fv,L2_fv,Linf_fv,"
+             << "L1_norm_fv,L2_norm_fv,Linf_norm_fv,"
+             << "total_mass,total_momentum_x,total_momentum_y,total_momentum_z,"
+             << "total_energy,min_density,min_pressure,"
+             << "has_nonfinite,has_negative_density,has_negative_pressure,"
+             << "cleaning_subcycles_step,"
+             << "projection_iterations_step,"
+             << "projection_solver_update_residual,"
+             << "projection_final_residual,"
+             << "projection_true_residual,"
+             << "projection_converged\n";
+        timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
+    }
 
     if (type == CleaningType::POWELL_SOURCE_LIMITED) {
         initialize_powell_limited_limiter_stats_csv(params, name);
@@ -2169,25 +2330,37 @@ void run_mhd_2d_case(
     bool wrote_first_limited_cell = false;
 
     while (true) {
+        const auto diag_compute_start = Clock::now();
         const LocalDivBNorms norms =
             compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
         const MHDRunDiagnostics run_diag =
             compute_mhd_run_diagnostics(U, gamma, dx * dy);
+        timing.diagnostics_compute_time_sec += seconds_since(diag_compute_start);
 
-        write_mhd_diagnostic_row(
-            diag,
-            step,
-            t,
-            params.glm.dt,
-            norms,
-            run_diag,
-            last_cleaning_subcycles_step,
-            last_projection_iterations_step,
-            last_projection_solver_update_residual,
-            last_projection_final_residual,
-            last_projection_true_residual,
-            last_projection_converged
-        );
+        if (should_write_diagnostic_row(
+                step,
+                t,
+                t_end,
+                has_mhd_run_failure(run_diag),
+                params.diagnostic_stride
+            )) {
+            const auto diag_write_start = Clock::now();
+            write_mhd_diagnostic_row(
+                diag,
+                step,
+                t,
+                params.glm.dt,
+                norms,
+                run_diag,
+                last_cleaning_subcycles_step,
+                last_projection_iterations_step,
+                last_projection_solver_update_residual,
+                last_projection_final_residual,
+                last_projection_true_residual,
+                last_projection_converged
+            );
+            timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
+        }
 
         if (has_mhd_run_failure(run_diag)) {
             stopped_for_failure = true;
@@ -2231,6 +2404,7 @@ void run_mhd_2d_case(
                 );
             }
             if (top_bad.found) {
+                const auto diag_write_start = Clock::now();
                 write_cleaning_failure_csv(
                     params,
                     name,
@@ -2242,6 +2416,7 @@ void run_mhd_2d_case(
                     run_total_retries,
                     run_min_dt_used
                 );
+                timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
             }
             print_mhd_run_failure_warning(
                 params,
@@ -2301,6 +2476,7 @@ void run_mhd_2d_case(
             // Step 1: HLLD finite-volume update.
             // Task C: pass stage GLM params when project_each_stage is enabled.
             // ------------------------------------------------------------------
+            const auto hydro_start = Clock::now();
             if (do_stage_projection) {
                 rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt,
                                  params.reconstruction, params.limiter,
@@ -2310,6 +2486,7 @@ void run_mhd_2d_case(
                                  params.reconstruction, params.limiter,
                                  nullptr);
             }
+            timing.hydro_time_sec += seconds_since(hydro_start);
 
             after_hydro_bad =
                 scan_physical_state(
@@ -2338,6 +2515,7 @@ void run_mhd_2d_case(
             // ------------------------------------------------------------------
             // Step 2: divergence-cleaning update (any CleaningType).
             // ------------------------------------------------------------------
+            const auto cleaning_start = Clock::now();
             cleaning_stats =
                 apply_cleaning_with_subcycles(
                     U,
@@ -2353,6 +2531,7 @@ void run_mhd_2d_case(
                         !printed_parabolic_subcycling,
                     wrote_first_limited_cell
                 );
+            timing.cleaning_time_sec += seconds_since(cleaning_start);
 
             if (cleaning_stats.bad_state.found && total_retries < max_retries) {
                 // Cleaning failed: halve dt and retry the full step.
@@ -2448,23 +2627,31 @@ void run_mhd_2d_case(
             step_stage_mins.failure_stage = "after_hydro_step";
             run_stage_mins.failure_stage  = "after_hydro_step";
 
-            write_cleaning_failure_csv(
-                params,
-                name,
-                next_step,
-                failure_time,
-                after_hydro_bad,
-                step_stage_mins,
-                cleaning_stats.projection_theta,
-                total_retries,
-                min_dt_used
-            );
+            {
+                const auto diag_write_start = Clock::now();
+                write_cleaning_failure_csv(
+                    params,
+                    name,
+                    next_step,
+                    failure_time,
+                    after_hydro_bad,
+                    step_stage_mins,
+                    cleaning_stats.projection_theta,
+                    total_retries,
+                    min_dt_used
+                );
+                timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
+            }
 
+            const auto failed_diag_compute_start = Clock::now();
             const LocalDivBNorms failed_norms =
                 compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
             const MHDRunDiagnostics failed_diag =
                 compute_mhd_run_diagnostics(U, gamma, dx * dy);
+            timing.diagnostics_compute_time_sec +=
+                seconds_since(failed_diag_compute_start);
 
+            const auto failed_diag_write_start = Clock::now();
             write_mhd_diagnostic_row(
                 diag,
                 next_step,
@@ -2479,6 +2666,8 @@ void run_mhd_2d_case(
                 std::numeric_limits<double>::quiet_NaN(),
                 true
             );
+            timing.diagnostics_write_time_sec +=
+                seconds_since(failed_diag_write_start);
 
             std::cerr << "WARNING: stopping MHD run after hydro update produced bad state"
                       << "  problem=" << params.problem
@@ -2540,25 +2729,33 @@ void run_mhd_2d_case(
             }
             run_stage_mins.failure_stage = step_stage_mins.failure_stage;
 
-            write_cleaning_failure_csv(
-                params,
-                name,
-                step,
-                failure_time,
-                cleaning_stats.bad_state,
-                step_stage_mins,
-                cleaning_stats.projection_theta,
-                total_retries,
-                min_dt_used
-            );
+            {
+                const auto diag_write_start = Clock::now();
+                write_cleaning_failure_csv(
+                    params,
+                    name,
+                    step,
+                    failure_time,
+                    cleaning_stats.bad_state,
+                    step_stage_mins,
+                    cleaning_stats.projection_theta,
+                    total_retries,
+                    min_dt_used
+                );
+                timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
+            }
 
             t = failure_time;
 
+            const auto failed_diag_compute_start = Clock::now();
             const LocalDivBNorms failed_norms =
                 compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
             const MHDRunDiagnostics failed_diag =
                 compute_mhd_run_diagnostics(U, gamma, dx * dy);
+            timing.diagnostics_compute_time_sec +=
+                seconds_since(failed_diag_compute_start);
 
+            const auto failed_diag_write_start = Clock::now();
             write_mhd_diagnostic_row(
                 diag,
                 step,
@@ -2573,6 +2770,8 @@ void run_mhd_2d_case(
                 cleaning_stats.projection_true_residual,
                 cleaning_stats.projection_converged
             );
+            timing.diagnostics_write_time_sec +=
+                seconds_since(failed_diag_write_start);
 
             std::cerr << "WARNING: stopping MHD run after cleaning produced bad state"
                       << "  problem=" << params.problem
@@ -2605,47 +2804,81 @@ void run_mhd_2d_case(
                   << " steps, t=" << t << "\n";
     }
 
+    {
+        const auto diag_write_start = Clock::now();
+        diag.flush();
+        timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
+    }
+
     // Final snapshot.
     if (params.glm.write_snapshot) {
         const std::string snap =
-            "results/mhd_runner/snapshots/" + prefix + "_" + name + "_final.csv";
+            runner_output_path(
+                params,
+                "snapshots",
+                prefix + "_" + name + "_final.csv"
+            ).string();
+        const auto snapshot_start = Clock::now();
         write_mhd_2d_snapshot(U, params, snap);
+        timing.snapshot_write_time_sec += seconds_since(snapshot_start);
         std::cout << "  Wrote " << snap << "\n";
     }
 
+    const auto final_diag_compute_start = Clock::now();
     const LocalDivBNorms final_norms =
         compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
     const MHDRunDiagnostics final_diag =
         compute_mhd_run_diagnostics(U, gamma, dx * dy);
+    timing.diagnostics_compute_time_sec += seconds_since(final_diag_compute_start);
     const bool final_time_reached =
         !stopped_for_failure && t >= t_end - 1.0e-12;
 
-    write_mhd_run_summary(
-        params,
-        name,
-        final_time_reached,
-        failure_time,
-        failure_reason,
-        final_norms,
-        energy_initial,
-        final_diag,
-        cleaning_subcycles_total,
-        projection_iterations_total,
-        params.glm.energy_policy,
-        last_projection_true_residual,
-        run_stage_mins,
-        run_projection_theta,
-        run_total_retries,
-        run_min_dt_used,
-        powell_limited_total_cells,
-        powell_limited_max_cells_per_step,
-        powell_limited_theta_min_global,
-        (powell_limited_total_cells > 0)
-            ? powell_limited_theta_sum
-                / static_cast<double>(powell_limited_total_cells)
-            : 1.0,
-        powell_limited_total_activations
-    );
+    timing.steps = step;
+    timing.total_wall_time_sec = seconds_since(run_start);
+    finalize_timing_fields(timing, nx, ny);
+
+    auto write_summary_with_timing = [&](const MHDRunTiming& timing_for_file) {
+        write_mhd_run_summary(
+            params,
+            name,
+            final_time_reached,
+            failure_time,
+            failure_reason,
+            final_norms,
+            energy_initial,
+            final_diag,
+            cleaning_subcycles_total,
+            projection_iterations_total,
+            params.glm.energy_policy,
+            last_projection_true_residual,
+            run_stage_mins,
+            run_projection_theta,
+            run_total_retries,
+            run_min_dt_used,
+            powell_limited_total_cells,
+            powell_limited_max_cells_per_step,
+            powell_limited_theta_min_global,
+            (powell_limited_total_cells > 0)
+                ? powell_limited_theta_sum
+                    / static_cast<double>(powell_limited_total_cells)
+                : 1.0,
+            powell_limited_total_activations,
+            timing_for_file
+        );
+    };
+
+    // The summary row itself contains summary_write_time_sec.  Write once to
+    // measure this small I/O cost, then overwrite with a self-consistent row that
+    // includes one measured summary write in total/output time.  The second write
+    // is intentionally not included, keeping the value stable and avoiding a
+    // recursive timing dependency.
+    MHDRunTiming timing_before_summary = timing;
+    const auto summary_start = Clock::now();
+    write_summary_with_timing(timing_before_summary);
+    timing.summary_write_time_sec = seconds_since(summary_start);
+    timing.total_wall_time_sec = seconds_since(run_start);
+    finalize_timing_fields(timing, nx, ny);
+    write_summary_with_timing(timing);
 
     std::cout << "  Wrote " << diag_name << "\n";
 }

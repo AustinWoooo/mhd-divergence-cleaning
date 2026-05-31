@@ -1,0 +1,9 @@
+reconstruction,N,dx,tfinal,final_L2_fv,final_L2_norm_fv,estimated_slope,diagnostic_file
+pcm,32,0.03125,0.5,0.00458908,0.000143252,0.8028612116576295,results/mhd_runner/divergence/mhd_da_conv_pcm_n32_mixed_glm.csv
+pcm,64,0.015625,0.5,0.00589538,9.20247e-05,0.8028612116576295,results/mhd_runner/divergence/mhd_da_conv_pcm_n64_mixed_glm.csv
+pcm,128,0.0078125,0.5,0.00659001,5.14299e-05,0.8028612116576295,results/mhd_runner/divergence/mhd_da_conv_pcm_n128_mixed_glm.csv
+pcm,256,0.00390625,0.5,0.00697394,2.7209e-05,0.8028612116576295,results/mhd_runner/divergence/mhd_da_conv_pcm_n256_mixed_glm.csv
+plm,32,0.03125,0.5,0.00644335,0.000201184,0.9546845281876261,results/mhd_runner/divergence/mhd_da_conv_plm_n32_mixed_glm.csv
+plm,64,0.015625,0.5,0.00687191,0.000107299,0.9546845281876261,results/mhd_runner/divergence/mhd_da_conv_plm_n64_mixed_glm.csv
+plm,128,0.0078125,0.5,0.00696828,5.43888e-05,0.9546845281876261,results/mhd_runner/divergence/mhd_da_conv_plm_n128_mixed_glm.csv
+plm,256,0.00390625,0.5,0.00712433,2.77967e-05,0.9546845281876261,results/mhd_runner/divergence/mhd_da_conv_plm_n256_mixed_glm.csv

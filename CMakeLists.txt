@@ -147,6 +147,15 @@ target_link_libraries(test_mhd_runner
         mhd_runner
 )
 
+add_executable(mhd_runner_cli
+    src/mhd_runner_cli.cpp
+)
+
+target_link_libraries(mhd_runner_cli
+    PRIVATE
+        mhd_runner
+)
+
 if(ENABLE_MPI)
     find_package(MPI REQUIRED COMPONENTS CXX)
 

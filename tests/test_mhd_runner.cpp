@@ -51,7 +51,9 @@ const std::vector<CleaningType> ALL_CASES = {
 void print_usage(const char* prog) {
     std::cerr
         << "Usage: " << prog
-        << " [--smoke] [--preserve-thermal-pressure] [--project-each-stage]"
+        << " [--smoke] [--performance-mode] [--no-snapshots]"
+        << " [--diagnostic-stride N] [--output-root PATH]"
+        << " [--preserve-thermal-pressure] [--project-each-stage]"
         << " [--reconstruction pcm|plm] [--limiter minmod|vanleer|mc]"
         << " [--nx N] [--ny N] [--tfinal T] [--output-prefix PREFIX]"
         << " [--first-order]"
@@ -72,6 +74,18 @@ void print_usage(const char* prog) {
         << "             final time override for the selected problem.\n"
         << "  --output-prefix PREFIX\n"
         << "             output filename prefix for the selected run.\n"
+        << "  --performance-mode\n"
+        << "             benchmark mode: disable snapshots and use sparse diagnostics\n"
+        << "             unless --diagnostic-stride is explicitly provided.\n"
+        << "  --no-snapshots\n"
+        << "             disable final snapshot CSV output.\n"
+        << "  --diagnostic-stride N\n"
+        << "             write divergence diagnostics every N accepted steps; step 0,\n"
+        << "             final step, and failures are always written.\n"
+        << "  --output-root PATH\n"
+        << "             root directory for runner outputs (default results/mhd_runner).\n"
+        << "  --list-problems, --list-methods\n"
+        << "             print supported problem or cleaning names and exit.\n"
         << "  --preserve-thermal-pressure\n"
         << "             use explicit cleaning energy repair where supported.\n"
         << "  --project-each-stage\n"
@@ -122,13 +136,20 @@ void run_problem(
     int ny_override,
     double t_end_override,
     bool has_t_end_override,
-    const std::string& output_prefix_override
+    const std::string& output_prefix_override,
+    bool no_snapshots,
+    bool performance_mode,
+    int diagnostic_stride,
+    bool diagnostic_stride_explicit,
+    const std::string& output_root
 ) {
     MHDRunParams params;
     params.problem = problem;
     params.gamma   = gamma;
     params.reconstruction = reconstruction;
     params.limiter        = limiter;
+    params.output_root = output_root;
+    params.performance_mode = performance_mode;
 
     params.glm.nx = smoke ? 32 : (nx_override > 0 ? nx_override : N);
     params.glm.ny = smoke ? 32 : (ny_override > 0 ? ny_override : N);
@@ -145,6 +166,17 @@ void run_problem(
         output_prefix_override.empty() ? prefix : output_prefix_override;
     params.glm.out_prefix = smoke ? base_prefix + "_smoke" : base_prefix;
     params.glm.project_each_stage = project_each_stage;
+    if (performance_mode) {
+        params.glm.write_snapshot = false;
+        params.diagnostic_stride =
+            diagnostic_stride_explicit ? diagnostic_stride : 100;
+    } else {
+        params.diagnostic_stride = diagnostic_stride;
+    }
+    if (no_snapshots) {
+        params.glm.write_snapshot = false;
+        params.glm.write_initial_snapshot = false;
+    }
 
     for (CleaningType type : cases) {
         MHDRunParams method_params = params;
@@ -174,6 +206,9 @@ void run_problem(
 
 int main(int argc, char* argv[]) {
     bool smoke = false;
+    bool no_snapshots = false;
+    bool performance_mode = false;
+    bool diagnostic_stride_explicit = false;
     bool energy_policy_explicit = false;
     bool project_each_stage = false;  // Task C
     CleaningEnergyPolicy energy_policy =
@@ -182,9 +217,11 @@ int main(int argc, char* argv[]) {
     MHD::SlopeLimiter   limiter        = MHD::SlopeLimiter::MC;
     int nx_override = -1;
     int ny_override = -1;
+    int diagnostic_stride = 1;
     double t_end_override = 0.0;
     bool has_t_end_override = false;
     std::string output_prefix_override;
+    std::string output_root = "results/mhd_runner";
 
     std::vector<std::string> positional;
     for (int i = 1; i < argc; ++i) {
@@ -193,8 +230,58 @@ int main(int argc, char* argv[]) {
             print_usage(argv[0]);
             return 0;
         }
+        if (arg == "--list-problems") {
+            std::cout << "orszag_tang\nfield_loop\ndivergence_advection\n";
+            return 0;
+        }
+        if (arg == "--list-methods") {
+            std::cout
+                << "none\nhyperbolic_glm\nmixed_glm\nparabolic\n"
+                << "elliptic_projection\npowell_source\n"
+                << "powell_source_subcycled\npowell_source_limited\n"
+                << "eglm\nmixed_eglm\ngi_mixed_eglm\n";
+            return 0;
+        }
         if (arg == "--smoke") {
             smoke = true;
+            continue;
+        }
+        if (arg == "--performance-mode") {
+            performance_mode = true;
+            no_snapshots = true;
+            continue;
+        }
+        if (arg == "--no-snapshots") {
+            no_snapshots = true;
+            continue;
+        }
+        if (arg == "--diagnostic-stride") {
+            if (i + 1 >= argc) {
+                std::cerr << "--diagnostic-stride requires an argument\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            diagnostic_stride = std::atoi(argv[++i]);
+            if (diagnostic_stride <= 0) {
+                std::cerr << "--diagnostic-stride must be positive\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            diagnostic_stride_explicit = true;
+            continue;
+        }
+        if (arg == "--output-root") {
+            if (i + 1 >= argc) {
+                std::cerr << "--output-root requires an argument\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+            output_root = argv[++i];
+            if (output_root.empty()) {
+                std::cerr << "--output-root must be non-empty\n\n";
+                print_usage(argv[0]);
+                return 1;
+            }
             continue;
         }
         if (arg == "--first-order") {
@@ -395,7 +482,12 @@ int main(int argc, char* argv[]) {
             ny_override,
             t_end_override,
             has_t_end_override,
-            output_prefix_override
+            output_prefix_override,
+            no_snapshots,
+            performance_mode,
+            diagnostic_stride,
+            diagnostic_stride_explicit,
+            output_root
         );
     }
 

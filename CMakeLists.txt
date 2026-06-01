@@ -30,17 +30,6 @@ target_link_libraries(test_hlld_primitive_recovery
 )
 
 # ============================================================
-# Reconstruction (HRSC MUSCL limiter) unit test
-# ============================================================
-
-add_executable(test_mhd_reconstruction
-    tests/test_mhd_reconstruction.cpp
-)
-
-target_link_libraries(test_mhd_reconstruction
-    PRIVATE
-        hlld
-)
 
 # ============================================================
 # 1D GLM core library
@@ -135,7 +124,8 @@ target_link_libraries(mhd_runner
 
 # ============================================================
 # Integrated HLLD + divergence-control runner test executable
-# (Orszag-Tang vortex, field-loop advection, and divergence advection)
+# (Orszag-Tang vortex, field-loop advection, divergence advection,
+#  and MHD blast wave)
 # ============================================================
 
 add_executable(test_mhd_runner
@@ -181,11 +171,6 @@ add_test(
     COMMAND test_hlld_primitive_recovery
 )
 
-add_test(
-    NAME mhd_reconstruction
-    COMMAND test_mhd_reconstruction
-)
-
 
 add_test(
     NAME glm_1d
@@ -212,7 +197,7 @@ add_test(
 add_test(
     NAME mhd_runner_smoke_sanity_check
     COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_SOURCE_DIR}/scripts/check_mhd_runner_sanity.py
+            ${CMAKE_SOURCE_DIR}/scripts/check/check_mhd_runner_sanity.py
             --prefix mhd_ot_smoke
 )
 
@@ -230,7 +215,7 @@ add_test(
 add_test(
     NAME mhd_runner_divergence_reduction_check
     COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_SOURCE_DIR}/scripts/check_mhd_runner_sanity.py
+            ${CMAKE_SOURCE_DIR}/scripts/check/check_mhd_runner_sanity.py
             --prefix mhd_da_smoke
             --methods none mixed_glm elliptic_projection
             --check-reduction
@@ -239,6 +224,25 @@ add_test(
 set_tests_properties(
     mhd_runner_divergence_reduction_check
     PROPERTIES DEPENDS mhd_runner_divergence_reduction_generate
+)
+
+add_test(
+    NAME mhd_runner_blast_wave_generate
+    COMMAND test_mhd_runner blast_wave
+            none parabolic elliptic_projection
+)
+
+add_test(
+    NAME mhd_runner_blast_wave_check
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/check/check_mhd_runner_sanity.py
+            --prefix mhd_blast
+            --methods none parabolic elliptic_projection
+)
+
+set_tests_properties(
+    mhd_runner_blast_wave_check
+    PROPERTIES DEPENDS mhd_runner_blast_wave_generate
 )
 
 if(ENABLE_MPI)
@@ -254,7 +258,7 @@ if(ENABLE_MPI)
     add_test(
         NAME mhd_sweep_mpi_smoke_check
         COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_mpi_sweep_summary.py
+                ${CMAKE_SOURCE_DIR}/scripts/check/check_mpi_sweep_summary.py
                 --summary-dir results/mhd_sweep_mpi/summaries
                 --min-rows 8
     )

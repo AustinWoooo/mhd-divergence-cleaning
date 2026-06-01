@@ -5,6 +5,7 @@
 //    1. Orszag-Tang vortex   (smooth, periodic, full 2D)
 //    2. Field-loop advection (weak localized magnetic loop)
 //    3. Divergence advection (controlled non-solenoidal perturbation)
+//    4. MHD blast wave       (strong shock in a magnetized, low-beta medium)
 //
 //  Each problem is run with several cleaning methods so divB behaviour can be
 //  compared in results/divergence/*.csv and results/snapshots/*_final.csv.
@@ -93,7 +94,8 @@ void print_usage(const char* prog) {
         << "             stage in addition to the end-of-step projection.\n"
         << "             Only affects elliptic_projection runs.\n"
         << "  problem   : orszag_tang | field_loop\n"
-        << "              divergence_advection  (default: orszag_tang)\n"
+        << "              divergence_advection | blast_wave\n"
+        << "              (default: orszag_tang)\n"
         << "  cleaning  : none | parabolic | hyperbolic_glm | mixed_glm\n"
         << "              elliptic_projection | powell_source\n"
         << "              powell_source_subcycled | powell_source_limited\n"
@@ -231,7 +233,8 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (arg == "--list-problems") {
-            std::cout << "orszag_tang\nfield_loop\ndivergence_advection\n";
+            std::cout << "orszag_tang\nfield_loop\ndivergence_advection\n"
+                      << "blast_wave\n";
             return 0;
         }
         if (arg == "--list-methods") {
@@ -418,6 +421,8 @@ int main(int argc, char* argv[]) {
             problems = {{"field_loop", "mhd_fl"}};
         } else if (p == "divergence_advection") {
             problems = {{"divergence_advection", "mhd_da"}};
+        } else if (p == "blast_wave") {
+            problems = {{"blast_wave", "mhd_blast"}};
         } else {
             std::cerr << "Unknown problem: \"" << p << "\"\n\n";
             print_usage(argv[0]);
@@ -462,6 +467,11 @@ int main(int argc, char* argv[]) {
             std::cout << "\n#### Divergence advection ####\n";
             gamma = 5.0 / 3.0;
             t_end = 0.5;
+        } else if (problem == "blast_wave") {
+            std::cout << "\n#### MHD blast wave ####\n";
+            gamma = 5.0 / 3.0;
+            // Stop the blast before its fast shock reaches the periodic edge.
+            t_end = 0.2;
         } else {
             throw std::runtime_error("Unhandled problem configuration: " + problem);
         }

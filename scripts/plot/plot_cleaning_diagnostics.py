@@ -26,6 +26,9 @@ DIVERGENCE_DIR = Path("results/mhd_runner/divergence")
 FAILURE_DIR = Path("results/mhd_runner/failures")
 SUMMARY_DIR = Path("results/mhd_runner/summaries")
 FIGURE_DIR = Path("figures/mhd_runner")
+FIG_DIVB_DIR     = FIGURE_DIR / "divB"
+FIG_CLEANING_DIR = FIGURE_DIR / "cleaning"
+FIG_DATA_DIR     = FIGURE_DIR / "data"
 
 PROBLEM = "orszag_tang"
 PREFIX = "mhd_ot"
@@ -151,9 +154,9 @@ def load_summaries() -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True, sort=False)
 
 
-def save_figure(fig: plt.Figure, name: str) -> Path:
-    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
-    path = FIGURE_DIR / name
+def save_figure(fig: plt.Figure, name: str, out_dir: Path = FIG_CLEANING_DIR) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / name
     fig.tight_layout()
     fig.savefig(path, dpi=200)
     plt.close(fig)
@@ -195,7 +198,7 @@ def plot_l2_divergence() -> Path | None:
     ax.set_title("Orszag-Tang FV divergence error")
     ax.grid(True, which="both", alpha=0.25)
     ax.legend(ncol=2, fontsize=8)
-    return save_figure(fig, "cleaning_ot_l2_fv.png")
+    return save_figure(fig, "cleaning_ot_l2_fv.png", FIG_DIVB_DIR)
 
 
 def plot_normalized_l2_divergence() -> Path | None:
@@ -233,7 +236,7 @@ def plot_normalized_l2_divergence() -> Path | None:
     ax.set_title("Orszag-Tang normalized FV divergence error")
     ax.grid(True, which="both", alpha=0.25)
     ax.legend(ncol=2, fontsize=8)
-    return save_figure(fig, "cleaning_ot_l2_norm_fv.png")
+    return save_figure(fig, "cleaning_ot_l2_norm_fv.png", FIG_DIVB_DIR)
 
 
 def normalize_failure_stage(stage: object) -> str:
@@ -324,7 +327,7 @@ def failure_summary(failures: pd.DataFrame) -> pd.DataFrame:
     ]
     if failures.empty:
         out = pd.DataFrame(columns=columns)
-        out.to_csv(FIGURE_DIR / "cleaning_failure_stage_summary.csv", index=False)
+        out.to_csv(FIG_DATA_DIR / "cleaning_failure_stage_summary.csv", index=False)
         return out
 
     df = failures.copy()
@@ -343,8 +346,8 @@ def failure_summary(failures: pd.DataFrame) -> pd.DataFrame:
         if column not in df.columns:
             df[column] = np.nan
     out = df[columns].copy()
-    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
-    path = FIGURE_DIR / "cleaning_failure_stage_summary.csv"
+    FIG_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    path = FIG_DATA_DIR / "cleaning_failure_stage_summary.csv"
     out.to_csv(path, index=False)
     print(f"wrote {path}")
     return out
@@ -805,8 +808,8 @@ def write_combined_summary(summaries: pd.DataFrame, failures: pd.DataFrame) -> P
         rows.append(row)
 
     out = pd.DataFrame(rows)
-    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
-    path = FIGURE_DIR / "cleaning_diagnostics_summary.csv"
+    FIG_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    path = FIG_DATA_DIR / "cleaning_diagnostics_summary.csv"
     out.to_csv(path, index=False)
     print(f"wrote {path}")
     return path

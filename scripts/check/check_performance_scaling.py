@@ -86,7 +86,7 @@ def infer_figure_suffix(csv_path: Path) -> str:
 
 def figure_path(stem: str, suffix: str = "", resolution: int | None = None) -> str:
     clean_suffix = suffix.strip("_")
-    parts = ["figures/mhd_runner/" + stem]
+    parts = ["figures/mhd_runner/performance/" + stem]
     if clean_suffix:
         parts.append(clean_suffix)
     if resolution is not None:

@@ -25,7 +25,7 @@ RESULTS_DIR = ROOT / "results" / "mhd_runner"
 PERF_DIR = RESULTS_DIR / "performance"
 SUMMARY_DIR = RESULTS_DIR / "summaries"
 DIV_DIR = RESULTS_DIR / "divergence"
-FIG_DIR = ROOT / "figures" / "mhd_runner"
+FIG_DIR = ROOT / "figures" / "mhd_runner" / "performance"
 
 PROBLEM_PREFIX = {
     "orszag_tang": "ot",

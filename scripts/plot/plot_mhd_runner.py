@@ -7,20 +7,20 @@ Visualise results produced by the integrated HLLD + GLM runner
 
 Four figures are saved:
 
-  figures/mhd_runner/mhd_runner_ot_divB.png
+  figures/mhd_runner/divB/mhd_runner_ot_divB.png
       Orszag-Tang: normalized finite-volume L2(divB) vs time for the
       primary divergence-control methods.
 
-  figures/mhd_runner/mhd_runner_ot_snapshot.png
+  figures/mhd_runner/snapshots/mhd_runner_ot_snapshot.png
       Orszag-Tang: 2D final-state maps (density, pressure, |divB|)
       for NONE vs the best finite-speed cleaning method.
 
-  figures/mhd_runner/mhd_runner_fl_divB.png
-  figures/mhd_runner/mhd_runner_fl_snapshot.png
+  figures/mhd_runner/divB/mhd_runner_fl_divB.png
+  figures/mhd_runner/snapshots/mhd_runner_fl_snapshot.png
       Field-loop advection diagnostics and final maps.
 
-  figures/mhd_runner/mhd_runner_da_divB.png
-  figures/mhd_runner/mhd_runner_da_snapshot.png
+  figures/mhd_runner/divB/mhd_runner_da_divB.png
+  figures/mhd_runner/snapshots/mhd_runner_da_snapshot.png
       Divergence-advection diagnostics and final maps.
 
 Usage
@@ -163,10 +163,16 @@ COLORS = {name: spec["color"] for name, spec in METHODS.items()}
 
 LINESTYLES = {name: spec["ls"] for name, spec in METHODS.items()}
 
-DIVERG_DIR   = Path("results/mhd_runner/divergence")
-SNAPSHOT_DIR = Path("results/mhd_runner/snapshots")
-FIGURES_DIR  = Path("figures/mhd_runner")
+DIVERG_DIR      = Path("results/mhd_runner/divergence")
+SNAPSHOT_DIR    = Path("results/mhd_runner/snapshots")
+FIGURES_DIR     = Path("figures/mhd_runner")
 CONVERGENCE_DIR = Path("results/mhd_runner/convergence")
+FIG_DIVB_DIR     = FIGURES_DIR / "divB"
+FIG_SNAP_DIR     = FIGURES_DIR / "snapshots"
+FIG_CLEANING_DIR = FIGURES_DIR / "cleaning"
+FIG_PRESSURE_DIR = FIGURES_DIR / "pressure"
+FIG_CONV_DIR     = FIGURES_DIR / "convergence"
+FIG_DATA_DIR     = FIGURES_DIR / "data"
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +319,7 @@ def plot_problem_divB(prefix: str, title: str, output_name: str):
     ax.grid(True, which="both", alpha=0.3)
     plt.tight_layout()
 
-    out = FIGURES_DIR / output_name
+    out = FIG_DIVB_DIR / output_name
     plt.savefig(out, dpi=200, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
@@ -380,7 +386,7 @@ def plot_problem_snapshot(prefix: str, title: str, output_name: str):
         fig.colorbar(ims[-1], ax=axes[row, :], shrink=0.72, pad=0.02, aspect=28)
 
     plt.tight_layout()
-    out = FIGURES_DIR / output_name
+    out = FIG_SNAP_DIR / output_name
     plt.savefig(out, dpi=150, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
@@ -423,7 +429,7 @@ def plot_divB_all_methods(problem_key: str, output_name: str):
     ax.grid(True, which="both", alpha=0.3)
     plt.tight_layout()
 
-    out = FIGURES_DIR / output_name
+    out = FIG_DIVB_DIR / output_name
     plt.savefig(out, dpi=220, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
@@ -434,6 +440,7 @@ def plot_history_all_map_problems(
     output_name: str,
     ylabel: str,
     use_semilogy: bool = False,
+    out_dir: Path = FIGURES_DIR,
 ):
     map_problems = [k for k, v in PROBLEMS.items() if v["kind"] == "map"]
     fig, axes = plt.subplots(
@@ -495,7 +502,7 @@ def plot_history_all_map_problems(
 
     axes[-1].set_xlabel("time")
     plt.tight_layout()
-    out = FIGURES_DIR / output_name
+    out = out_dir / output_name
     plt.savefig(out, dpi=220, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
@@ -556,7 +563,7 @@ def plot_single_method_snapshot(
         fig.colorbar(im, ax=ax, shrink=0.82, pad=0.02)
 
     plt.tight_layout()
-    out = FIGURES_DIR / output_name
+    out = FIG_SNAP_DIR / output_name
     plt.savefig(out, dpi=220, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
@@ -602,7 +609,7 @@ def write_summary_csv(output_name: str = "mhd_runner_summary.csv"):
                 "has_negative_pressure": has_negative_pressure,
             })
 
-    out = FIGURES_DIR / output_name
+    out = FIG_DATA_DIR / output_name
     out.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(out, index=False)
     print(f"  Wrote → {out}")
@@ -639,7 +646,7 @@ def plot_field_loop_convergence():
     ax.legend()
     plt.tight_layout()
 
-    out = FIGURES_DIR / "field_loop_convergence.png"
+    out = FIG_CONV_DIR / "field_loop_convergence.png"
     plt.savefig(out, dpi=220, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
@@ -683,7 +690,7 @@ def plot_pcm_vs_plm_hrsc():
     ax.legend()
     plt.tight_layout()
 
-    out = FIGURES_DIR / "pcm_vs_plm_divB.png"
+    out = FIG_DIVB_DIR / "pcm_vs_plm_divB.png"
     plt.savefig(out, dpi=220, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
@@ -728,7 +735,7 @@ def plot_ot_divB():
     ax.grid(True, which="both", alpha=0.3)
     plt.tight_layout()
 
-    out = FIGURES_DIR / "mhd_runner_ot_divB.png"
+    out = FIG_DIVB_DIR / "mhd_runner_ot_divB.png"
     plt.savefig(out, dpi=200, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
@@ -810,7 +817,7 @@ def plot_ot_snapshot():
         fig.colorbar(ims[-1], ax=axes[row, :], shrink=0.72, pad=0.02, aspect=28)
 
     plt.tight_layout()
-    out = FIGURES_DIR / "mhd_runner_ot_snapshot.png"
+    out = FIG_SNAP_DIR / "mhd_runner_ot_snapshot.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
@@ -821,7 +828,9 @@ def plot_ot_snapshot():
 # ---------------------------------------------------------------------------
 
 def main():
-    FIGURES_DIR.mkdir(exist_ok=True)
+    for _d in (FIG_DIVB_DIR, FIG_SNAP_DIR, FIG_CLEANING_DIR,
+               FIG_PRESSURE_DIR, FIG_CONV_DIR, FIG_DATA_DIR):
+        _d.mkdir(parents=True, exist_ok=True)
 
     print("=== Orszag-Tang vortex ===")
     plot_ot_divB()
@@ -890,11 +899,13 @@ def main():
         "energy_drift",
         "mhd_runner_energy_drift_all_methods.png",
         r"Relative total-energy drift",
+        out_dir=FIG_CLEANING_DIR,
     )
     plot_history_all_map_problems(
         "min_pressure",
         "mhd_runner_min_pressure_all_methods.png",
         r"Minimum pressure",
+        out_dir=FIG_PRESSURE_DIR,
     )
     write_summary_csv()
 

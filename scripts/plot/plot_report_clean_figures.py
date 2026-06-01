@@ -208,7 +208,7 @@ def load_problem_history(problem: str, method: str) -> pd.DataFrame | None:
 
 
 def method_completed(problem: str, method: str) -> bool | None:
-    summary = read_csv(FIGURES / "mhd_runner" / "mhd_runner_summary.csv")
+    summary = read_csv(FIGURES / "mhd_runner" / "data" / "mhd_runner_summary.csv")
     if summary is None or not {"problem", "method", "completed"}.issubset(summary.columns):
         return None
     row = summary[(summary["problem"] == problem) & (summary["method"] == method)]
@@ -447,7 +447,7 @@ def plot_figure_1_to_5() -> None:
 
 
 def load_mhd_runner_summary() -> pd.DataFrame | None:
-    return read_csv(FIGURES / "mhd_runner" / "mhd_runner_summary.csv")
+    return read_csv(FIGURES / "mhd_runner" / "data" / "mhd_runner_summary.csv")
 
 
 def load_performance_benchmark() -> pd.DataFrame | None:

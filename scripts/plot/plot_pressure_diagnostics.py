@@ -15,10 +15,14 @@ DIV_DIR = RESULTS / "divergence"
 SNAP_DIR = RESULTS / "snapshots"
 FAIL_DIR = RESULTS / "failures"
 FIG_DIR = ROOT / "figures" / "mhd_runner"
-FIG_DIR.mkdir(parents=True, exist_ok=True)
+FIG_PRESSURE_DIR = FIG_DIR / "pressure"
+FIG_SNAP_DIR = FIG_DIR / "snapshots"
+FIG_DATA_DIR = FIG_DIR / "data"
+for _d in (FIG_PRESSURE_DIR, FIG_SNAP_DIR, FIG_DATA_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
 
-STAGE_SUMMARY_CSV = FIG_DIR / "cleaning_failure_stage_summary.csv"
-RUNNER_SUMMARY_CSV = FIG_DIR / "mhd_runner_summary.csv"
+STAGE_SUMMARY_CSV = FIG_DATA_DIR / "cleaning_failure_stage_summary.csv"
+RUNNER_SUMMARY_CSV = FIG_DATA_DIR / "mhd_runner_summary.csv"
 T_FINAL_OT = 0.5
 
 METHODS_MAIN = [
@@ -162,7 +166,7 @@ def plot_ot_min_pressure():
         ax.legend(fontsize=8.5, ncol=2)
     plt.tight_layout()
 
-    out = FIG_DIR / "mhd_runner_ot_min_pressure.png"
+    out = FIG_PRESSURE_DIR / "mhd_runner_ot_min_pressure.png"
     fig.savefig(out, dpi=220, bbox_inches="tight")
     plt.close(fig)
     print(f"saved: {out}")
@@ -241,7 +245,7 @@ def plot_ot_pressure_failure_stages():
     ax.legend(fontsize=8, ncol=2)
     plt.tight_layout()
 
-    out = FIG_DIR / "mhd_runner_ot_pressure_failure_stages.png"
+    out = FIG_PRESSURE_DIR / "mhd_runner_ot_pressure_failure_stages.png"
     fig.savefig(out, dpi=220, bbox_inches="tight")
     plt.close(fig)
     print(f"saved: {out}")
@@ -329,7 +333,7 @@ def plot_ot_pressure_maps():
         fontsize=12,
     )
 
-    out = FIG_DIR / "mhd_runner_ot_pressure_maps.png"
+    out = FIG_SNAP_DIR / "mhd_runner_ot_pressure_maps.png"
     fig.savefig(out, dpi=220, bbox_inches="tight")
     plt.close(fig)
     print(f"saved: {out}")
@@ -482,7 +486,7 @@ def plot_ot_failure_times_clean():
     )
     plt.tight_layout()
 
-    out = FIG_DIR / "mhd_runner_ot_failure_times_clean.png"
+    out = FIG_PRESSURE_DIR / "mhd_runner_ot_failure_times_clean.png"
     fig.savefig(out, dpi=220, bbox_inches="tight")
     plt.close(fig)
     print(f"saved: {out}")
@@ -544,7 +548,7 @@ def plot_ot_bad_cell_energy_clean():
     ax.legend(fontsize=9, ncol=2, loc="upper right")
     plt.tight_layout()
 
-    out = FIG_DIR / "mhd_runner_ot_bad_cell_energy_clean.png"
+    out = FIG_PRESSURE_DIR / "mhd_runner_ot_bad_cell_energy_clean.png"
     fig.savefig(out, dpi=220, bbox_inches="tight")
     plt.close(fig)
     print(f"saved: {out}")

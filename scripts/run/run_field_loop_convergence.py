@@ -4,9 +4,9 @@ Run field-loop convergence and PCM-vs-PLM evidence cases.
 
 Outputs:
   results/mhd_runner/convergence/field_loop_convergence.csv
-  figures/mhd_runner/field_loop_convergence.png
+  figures/mhd_runner/convergence/field_loop_convergence.png
   results/mhd_runner/hrsc/pcm_vs_plm_summary.csv
-  figures/mhd_runner/pcm_vs_plm_divB.png
+  figures/mhd_runner/divB/pcm_vs_plm_divB.png
 """
 
 from __future__ import annotations
@@ -33,7 +33,8 @@ DIV_DIR = RESULTS_DIR / "divergence"
 SNAP_DIR = RESULTS_DIR / "snapshots"
 CONV_DIR = RESULTS_DIR / "convergence"
 HRSC_DIR = RESULTS_DIR / "hrsc"
-FIG_DIR = ROOT / "figures" / "mhd_runner"
+FIG_CONV_DIR = ROOT / "figures" / "mhd_runner" / "convergence"
+FIG_DIVB_DIR = ROOT / "figures" / "mhd_runner" / "divB"
 
 TFINAL = 0.5
 FIELD_LOOP_RADIUS = 0.15
@@ -138,7 +139,7 @@ def write_convergence_csv(rows: list[dict[str, float]]) -> Path:
 
 
 def plot_convergence(df: pd.DataFrame) -> Path:
-    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    FIG_CONV_DIR.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(7.2, 5.0))
     for reconstruction, group in df.groupby("reconstruction"):
         group = group.sort_values("dx")
@@ -156,7 +157,7 @@ def plot_convergence(df: pd.DataFrame) -> Path:
     ax.set_title("Field-loop advection convergence against periodic exact shift")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend()
-    out = FIG_DIR / "field_loop_convergence.png"
+    out = FIG_CONV_DIR / "field_loop_convergence.png"
     fig.tight_layout()
     fig.savefig(out, dpi=220, bbox_inches="tight")
     plt.close(fig)
@@ -202,7 +203,7 @@ def write_hrsc_summary() -> Path:
 
 
 def plot_hrsc_comparison() -> Path:
-    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    FIG_DIVB_DIR.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(7.4, 4.8))
     styles = {"pcm": ("#d62728", "--"), "plm": ("#2ca02c", "-")}
     for reconstruction in ("pcm", "plm"):
@@ -222,7 +223,7 @@ def plot_hrsc_comparison() -> Path:
     ax.set_title("Field-loop PCM vs PLM reconstruction")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend()
-    out = FIG_DIR / "pcm_vs_plm_divB.png"
+    out = FIG_DIVB_DIR / "pcm_vs_plm_divB.png"
     fig.tight_layout()
     fig.savefig(out, dpi=220, bbox_inches="tight")
     plt.close(fig)

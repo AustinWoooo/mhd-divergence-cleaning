@@ -101,6 +101,7 @@ Supported problems:
 - `orszag_tang`
 - `field_loop`
 - `divergence_advection`
+- `blast_wave`
 
 Supported cleaning names:
 
@@ -134,6 +135,20 @@ Divergence-advection comparison:
 ```bash
 ./build/mhd_runner_cli divergence_advection none mixed_glm mixed_eglm
 ```
+
+MHD blast wave (strong shock in a magnetized, low-beta background):
+
+```bash
+./build/mhd_runner_cli blast_wave none parabolic elliptic_projection
+```
+
+The blast sets a high-pressure circular core (`P=10`, `R=0.1`) in a uniform,
+strongly magnetized ambient medium (`rho=1`, `P=0.1`, `B=(1,1,0)/sqrt(2)`, plasma
+`beta=0.2`).  The fast shock expands anisotropically under magnetic tension.
+Periodic boundaries are used and the default `t_end=0.2` keeps the shock interior.
+On this low-beta state the GLM-family methods do not complete with the default
+conserve-total-energy policy, so `none`, `parabolic`, and `elliptic_projection`
+are the methods that run to completion.
 
 Run a smaller explicit case:
 
@@ -354,6 +369,7 @@ Standard science figures:
 ./build/mhd_runner_cli
 ./build/mhd_runner_cli field_loop none hyperbolic_glm mixed_glm mixed_eglm gi_mixed_eglm
 ./build/mhd_runner_cli divergence_advection none hyperbolic_glm mixed_glm mixed_eglm gi_mixed_eglm
+./build/mhd_runner_cli blast_wave none parabolic elliptic_projection
 python3 scripts/plot_mhd_runner.py
 ```
 
@@ -405,8 +421,8 @@ python3 scripts/merge_mpi_sweep_summaries.py
   `none` versus GLM/EGLM/projection/Powell-type methods.
 - No constrained transport: yes.  The code uses divergence cleaning/projection
   methods, not CT.
-- Applied to MHD test problems: yes, Orszag-Tang, field loop, and divergence
-  advection.
+- Applied to MHD test problems: yes, Orszag-Tang, field loop, divergence
+  advection, and the MHD blast wave.
 - Performance scaling measured: yes, via
   `scripts/run_performance_scaling.py`.
 - HRSC bonus: yes, HLLD fluxes with PLM/MUSCL reconstruction, TVD limiters,

@@ -124,7 +124,8 @@ target_link_libraries(mhd_runner
 
 # ============================================================
 # Integrated HLLD + divergence-control runner test executable
-# (Orszag-Tang vortex, field-loop advection, and divergence advection)
+# (Orszag-Tang vortex, field-loop advection, divergence advection,
+#  and MHD blast wave)
 # ============================================================
 
 add_executable(test_mhd_runner
@@ -223,6 +224,25 @@ add_test(
 set_tests_properties(
     mhd_runner_divergence_reduction_check
     PROPERTIES DEPENDS mhd_runner_divergence_reduction_generate
+)
+
+add_test(
+    NAME mhd_runner_blast_wave_generate
+    COMMAND test_mhd_runner blast_wave
+            none parabolic elliptic_projection
+)
+
+add_test(
+    NAME mhd_runner_blast_wave_check
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/check/check_mhd_runner_sanity.py
+            --prefix mhd_blast
+            --methods none parabolic elliptic_projection
+)
+
+set_tests_properties(
+    mhd_runner_blast_wave_check
+    PROPERTIES DEPENDS mhd_runner_blast_wave_generate
 )
 
 if(ENABLE_MPI)

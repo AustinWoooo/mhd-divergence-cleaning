@@ -23,6 +23,10 @@ Four figures are saved:
   figures/mhd_runner/snapshots/mhd_runner_da_snapshot.png
       Divergence-advection diagnostics and final maps.
 
+  figures/mhd_runner/divB/mhd_runner_blast_divB.png
+  figures/mhd_runner/snapshots/mhd_runner_blast_snapshot.png
+      MHD blast-wave diagnostics and final maps (NONE vs projection).
+
 Usage
 -----
   # 1. Build and run the C++ runner first:
@@ -51,6 +55,7 @@ import matplotlib.colors as mcolors
 OT_PREFIX = "mhd_ot"
 FL_PREFIX = "mhd_fl"
 DA_PREFIX = "mhd_da"
+BLAST_PREFIX = "mhd_blast"
 
 PROBLEMS = {
     "orszag_tang": {
@@ -72,6 +77,13 @@ PROBLEMS = {
         "kind": "map",
         "title": "Divergence Advection",
         "t_end": 0.5,
+        "gamma": "5/3",
+    },
+    "blast_wave": {
+        "prefix": BLAST_PREFIX,
+        "kind": "map",
+        "title": "MHD Blast Wave",
+        "t_end": 0.2,
         "gamma": "5/3",
     },
 }
@@ -325,8 +337,14 @@ def plot_problem_divB(prefix: str, title: str, output_name: str):
     plt.close()
 
 
-def plot_problem_snapshot(prefix: str, title: str, output_name: str):
-    pairs = [("none", "None"), ("mixed_glm", "Mixed GLM")]
+def plot_problem_snapshot(
+    prefix: str,
+    title: str,
+    output_name: str,
+    pairs: list[tuple[str, str]] | None = None,
+):
+    if pairs is None:
+        pairs = [("none", "None"), ("mixed_glm", "Mixed GLM")]
 
     dfs = {}
     for ct, _ in pairs:
@@ -892,6 +910,37 @@ def main():
             ("Bmag", r"Final $|\mathbf{B}|$", "magma", False, False),
         ],
         "mhd_runner_da_snapshot_mixed_glm.png",
+    )
+
+    print("\n=== MHD blast wave ===")
+    plot_problem_divB(
+        BLAST_PREFIX,
+        r"MHD Blast Wave  --  HLLD + cleaning comparison"
+        "\n"
+        r"$N=128\times128$,  $\gamma=5/3$,  $t_{\rm end}=0.2$",
+        "mhd_runner_blast_divB.png",
+    )
+    # mixed_glm does not complete on the low-beta blast (conserve-total-energy
+    # drives p<0), so compare NONE against the projection method that finishes.
+    plot_problem_snapshot(
+        BLAST_PREFIX,
+        r"MHD Blast Wave  --  final state at $t=0.2$",
+        "mhd_runner_blast_snapshot.png",
+        pairs=[("none", "None"), ("elliptic_projection", "Projection")],
+    )
+    plot_divB_all_methods(
+        "blast_wave",
+        "mhd_runner_blast_divB_all_methods.png",
+    )
+    plot_single_method_snapshot(
+        "blast_wave",
+        "elliptic_projection",
+        [
+            ("p", r"Final pressure $P$", "plasma", False, False),
+            ("Bmag", r"Final $|\mathbf{B}|$", "magma", False, False),
+            ("divB_fv", r"Final $|\nabla\!\cdot\!B|$ (FV)", "hot_r", True, True),
+        ],
+        "mhd_runner_blast_snapshot_projection.png",
     )
 
     print("\n=== Cross-problem diagnostics ===")

@@ -196,7 +196,7 @@ add_test(
 add_test(
     NAME mhd_runner_smoke_sanity_check
     COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_SOURCE_DIR}/scripts/check_mhd_runner_sanity.py
+            ${CMAKE_SOURCE_DIR}/scripts/check/check_mhd_runner_sanity.py
             --prefix mhd_ot_smoke
 )
 
@@ -214,7 +214,7 @@ add_test(
 add_test(
     NAME mhd_runner_divergence_reduction_check
     COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_SOURCE_DIR}/scripts/check_mhd_runner_sanity.py
+            ${CMAKE_SOURCE_DIR}/scripts/check/check_mhd_runner_sanity.py
             --prefix mhd_da_smoke
             --methods none mixed_glm elliptic_projection
             --check-reduction
@@ -238,7 +238,7 @@ if(ENABLE_MPI)
     add_test(
         NAME mhd_sweep_mpi_smoke_check
         COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_mpi_sweep_summary.py
+                ${CMAKE_SOURCE_DIR}/scripts/check/check_mpi_sweep_summary.py
                 --summary-dir results/mhd_sweep_mpi/summaries
                 --min-rows 8
     )

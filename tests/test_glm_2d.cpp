@@ -585,6 +585,144 @@ void test_mixed_glm_damping_factor() {
     std::cout << "Mixed GLM damping assertion passed.\n";
 }
 
+void initialize_sinusoidal_divergence_state(
+    std::vector<State>& U,
+    const GLM2DParams& params
+) {
+    constexpr double gamma = 5.0 / 3.0;
+    constexpr double amplitude = 0.05;
+    const double pi = std::acos(-1.0);
+
+    for (int j = 0; j < params.ny; ++j) {
+        const double y = (j + 0.5) * params.dy;
+        for (int i = 0; i < params.nx; ++i) {
+            const double x = (i + 0.5) * params.dx;
+
+            State cell{};
+            cell.fill(0.0);
+            cell[RHO] = 1.0;
+            cell[BX] =
+                amplitude
+              * std::sin(2.0 * pi * x)
+              * std::sin(2.0 * pi * y);
+            cell[BY] = 0.0;
+            cell[BZ] = 0.0;
+            cell[PSI] = 0.0;
+            set_total_energy_from_pressure(cell, 1.0, gamma);
+
+            U[idx2d(i, j, params.nx)] = cell;
+        }
+    }
+}
+
+void run_pure_cleaning_steps(
+    std::vector<State>& U,
+    CleaningType type,
+    GLM2DParams params,
+    double t_end
+) {
+    if (type == CleaningType::NONE) {
+        return;
+    }
+
+    if (type == CleaningType::ELLIPTIC_PROJECTION) {
+        apply_elliptic_projection_2d(U, params);
+        return;
+    }
+
+    const double stable_dt =
+        max_cleaning_dt(type, params.dx, params.dy, params);
+    const int nstep =
+        std::max(1, static_cast<int>(std::ceil(t_end / stable_dt)));
+    params.dt = t_end / static_cast<double>(nstep);
+
+    for (int step = 0; step < nstep; ++step) {
+        advance_glm_2d_one_step(U, type, params);
+        assert_all_finite(U);
+    }
+}
+
+void test_pure_glm_cleaning_reduces_sinusoidal_divergence() {
+    GLM2DParams params;
+    params.nx = 32;
+    params.ny = 32;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+    params.ch = 1.0;
+    params.cp = 0.2;
+    params.cfl = 0.25;
+    params.poisson_max_iter = 50000;
+    params.poisson_tol = 1.0e-12;
+    params.poisson_omega = 1.7;
+
+    const double t_end = 0.5;
+
+    std::vector<State> initial(params.nx * params.ny);
+    initialize_sinusoidal_divergence_state(initial, params);
+
+    const LocalDivBNorms initial_norms =
+        compute_fv_divB_norms_2d(
+            initial,
+            params.nx,
+            params.ny,
+            params.dx,
+            params.dy
+        );
+    assert(initial_norms.L2 > 0.0);
+
+    std::vector<State> none = initial;
+    std::vector<State> hyperbolic = initial;
+    std::vector<State> mixed = initial;
+    std::vector<State> projection = initial;
+
+    run_pure_cleaning_steps(none, CleaningType::NONE, params, t_end);
+    run_pure_cleaning_steps(
+        hyperbolic,
+        CleaningType::HYPERBOLIC_GLM,
+        params,
+        t_end
+    );
+    run_pure_cleaning_steps(mixed, CleaningType::MIXED_GLM, params, t_end);
+    run_pure_cleaning_steps(
+        projection,
+        CleaningType::ELLIPTIC_PROJECTION,
+        params,
+        t_end
+    );
+
+    const LocalDivBNorms none_norms =
+        compute_fv_divB_norms_2d(none, params.nx, params.ny, params.dx, params.dy);
+    const LocalDivBNorms hyperbolic_norms =
+        compute_fv_divB_norms_2d(
+            hyperbolic,
+            params.nx,
+            params.ny,
+            params.dx,
+            params.dy
+        );
+    const LocalDivBNorms mixed_norms =
+        compute_fv_divB_norms_2d(mixed, params.nx, params.ny, params.dx, params.dy);
+    const LocalDivBNorms projection_norms =
+        compute_fv_divB_norms_2d(
+            projection,
+            params.nx,
+            params.ny,
+            params.dx,
+            params.dy
+        );
+
+    assert(approx_equal(none_norms.L2, initial_norms.L2));
+    assert(hyperbolic_norms.L2 < none_norms.L2);
+    assert(mixed_norms.L2 < 0.5 * none_norms.L2);
+    assert(projection_norms.L2 < 1.0e-6 * none_norms.L2);
+
+    std::cout << "Pure GLM sinusoidal FV L2 ratios:"
+              << " hyperbolic=" << hyperbolic_norms.L2 / none_norms.L2
+              << " mixed=" << mixed_norms.L2 / none_norms.L2
+              << " projection=" << projection_norms.L2 / none_norms.L2
+              << "\n";
+}
+
 } // namespace
 
 int main() {
@@ -598,6 +736,7 @@ int main() {
     test_parabolic_moderate_case_keeps_pressure_positive();
     test_powell_advects_bump_with_uniform_velocity();
     test_mixed_glm_damping_factor();
+    test_pure_glm_cleaning_reduces_sinusoidal_divergence();
 
     GLM2DParams params;
 

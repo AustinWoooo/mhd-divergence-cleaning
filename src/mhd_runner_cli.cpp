@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -52,6 +54,8 @@ void print_usage(const char* prog) {
         << "Usage: " << prog
         << " [--smoke] [--performance-mode] [--no-snapshots]"
         << " [--diagnostic-stride N] [--output-root PATH]"
+        << " [--glm-ch-factor X] [--glm-cd X | --glm-cr X]"
+        << " [--glm-subcycles N]"
         << " [--preserve-thermal-pressure] [--project-each-stage]"
         << " [--reconstruction pcm|plm] [--limiter minmod|vanleer|mc]"
         << " [--nx N] [--ny N] [--tfinal T] [--output-prefix PREFIX]"
@@ -65,6 +69,10 @@ void print_usage(const char* prog) {
         << "  --no-snapshots          Disable initial/final snapshot CSV output.\n"
         << "  --diagnostic-stride N   Write time-history diagnostics every N accepted steps.\n"
         << "  --output-root PATH      Root for runner CSV outputs (default: results/mhd_runner).\n"
+        << "  --glm-ch-factor X       Scale ch from the initial max signal speed (default: 1).\n"
+        << "  --glm-cd X              Retained psi fraction per mixed-GLM cleaning substep, 0<X<1.\n"
+        << "  --glm-cr X              Dedner-style cr=cp^2/ch for mixed-GLM damping.\n"
+        << "  --glm-subcycles N       Minimum GLM cleaning subcycles per MHD step.\n"
         << "  --list-problems         Print supported MHD problems.\n"
         << "  --list-methods          Print supported cleaning methods.\n";
 }
@@ -138,6 +146,10 @@ void run_problem(
     bool performance_mode,
     int diagnostic_stride,
     bool diagnostic_stride_explicit,
+    double glm_ch_factor,
+    double glm_cd,
+    double glm_cr,
+    int glm_subcycles,
     const std::string& output_root
 ) {
     MHDRunParams params;
@@ -157,6 +169,10 @@ void run_problem(
     params.glm.t_end = smoke ? std::min(selected_t_end, 0.02) : selected_t_end;
     params.glm.cfl = 0.4;
     params.glm.cp = 0.2;
+    params.glm.glm_ch_factor = glm_ch_factor;
+    params.glm.glm_cd = glm_cd;
+    params.glm.glm_cr = glm_cr;
+    params.glm.glm_subcycles = glm_subcycles;
     params.glm.write_snapshot = !smoke;
     params.glm.write_initial_snapshot = false;
     params.glm.project_each_stage = project_each_stage;
@@ -218,6 +234,10 @@ int main(int argc, char* argv[]) {
     int nx_override = -1;
     int ny_override = -1;
     int diagnostic_stride = 1;
+    double glm_ch_factor = 4.0;
+    double glm_cd = std::numeric_limits<double>::quiet_NaN();
+    double glm_cr = 0.1;
+    int glm_subcycles = 1;
     double t_end_override = 0.0;
     bool has_t_end_override = false;
     std::string output_prefix_override;
@@ -260,6 +280,37 @@ int main(int argc, char* argv[]) {
                         arg
                     );
                 diagnostic_stride_explicit = true;
+                continue;
+            }
+            if (arg == "--glm-ch-factor") {
+                glm_ch_factor =
+                    parse_positive_double(
+                        require_value(argc, argv, i, arg).c_str(),
+                        arg
+                    );
+                continue;
+            }
+            if (arg == "--glm-cd") {
+                glm_cd = std::atof(require_value(argc, argv, i, arg).c_str());
+                if (!(glm_cd > 0.0 && glm_cd < 1.0)) {
+                    throw std::invalid_argument("--glm-cd must satisfy 0 < value < 1");
+                }
+                continue;
+            }
+            if (arg == "--glm-cr") {
+                glm_cr =
+                    parse_positive_double(
+                        require_value(argc, argv, i, arg).c_str(),
+                        arg
+                    );
+                continue;
+            }
+            if (arg == "--glm-subcycles") {
+                glm_subcycles =
+                    parse_positive_int(
+                        require_value(argc, argv, i, arg).c_str(),
+                        arg
+                    );
                 continue;
             }
             if (arg == "--output-root") {
@@ -358,6 +409,10 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        if (std::isfinite(glm_cd) && std::isfinite(glm_cr)) {
+            throw std::invalid_argument("set only one of --glm-cd or --glm-cr");
+        }
+
         run_problem(
             problem,
             default_prefix_for_problem(problem),
@@ -380,6 +435,10 @@ int main(int argc, char* argv[]) {
             performance_mode,
             diagnostic_stride,
             diagnostic_stride_explicit,
+            glm_ch_factor,
+            glm_cd,
+            glm_cr,
+            glm_subcycles,
             output_root
         );
     } catch (const std::exception& exc) {

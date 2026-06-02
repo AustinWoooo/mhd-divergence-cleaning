@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BUILD_DIR = ROOT / "build"
 DEFAULT_RUNNER = BUILD_DIR / "mhd_runner_cli"
 RESULTS_DIR = ROOT / "results" / "mhd_runner"
@@ -83,6 +83,14 @@ CSV_FIELDS = [
     "method",
     "reconstruction",
     "limiter",
+    "glm_ch_factor",
+    "glm_cd",
+    "glm_cr",
+    "glm_subcycles",
+    "glm_ch",
+    "glm_cp",
+    "glm_effective_cd",
+    "glm_effective_cr",
     "nx",
     "ny",
     "ncell",
@@ -112,6 +120,9 @@ CSV_FIELDS = [
     "time_integrated_L2_norm_fv",
     "min_pressure",
     "min_density",
+    "has_nonfinite",
+    "has_negative_density",
+    "has_negative_pressure",
     "energy_drift",
     "failure_reason",
     "summary_file",
@@ -185,6 +196,9 @@ def read_divergence_metrics(path: Path) -> dict[str, float]:
         "peak_L2_norm_fv": math.nan,
         "peak_Linf_norm_fv": math.nan,
         "time_integrated_L2_norm_fv": math.nan,
+        "has_nonfinite": math.nan,
+        "has_negative_density": math.nan,
+        "has_negative_pressure": math.nan,
     }
     if not path.exists():
         print(
@@ -256,6 +270,10 @@ def read_divergence_metrics(path: Path) -> dict[str, float]:
     elif len(rows) == 1 and math.isfinite(l2_values[0]):
         metrics["time_integrated_L2_norm_fv"] = 0.0
 
+    for column in ("has_nonfinite", "has_negative_density", "has_negative_pressure"):
+        if column in rows[0]:
+            metrics[column] = max(as_float(row, column, 0.0) for row in rows)
+
     return metrics
 
 
@@ -280,6 +298,14 @@ def make_performance_row(
         "method": canonical,
         "reconstruction": reconstruction,
         "limiter": limiter,
+        "glm_ch_factor": as_float(summary, "glm_ch_factor"),
+        "glm_cd": as_float(summary, "glm_cd"),
+        "glm_cr": as_float(summary, "glm_cr"),
+        "glm_subcycles": as_int(summary, "glm_subcycles", 1),
+        "glm_ch": as_float(summary, "glm_ch"),
+        "glm_cp": as_float(summary, "glm_cp"),
+        "glm_effective_cd": as_float(summary, "glm_effective_cd"),
+        "glm_effective_cr": as_float(summary, "glm_effective_cr"),
         "nx": n,
         "ny": n,
         "ncell": ncell,
@@ -309,6 +335,9 @@ def make_performance_row(
         "time_integrated_L2_norm_fv": divergence_metrics["time_integrated_L2_norm_fv"],
         "min_pressure": as_float(summary, "min_pressure"),
         "min_density": as_float(summary, "min_density"),
+        "has_nonfinite": divergence_metrics["has_nonfinite"],
+        "has_negative_density": divergence_metrics["has_negative_density"],
+        "has_negative_pressure": divergence_metrics["has_negative_pressure"],
         "energy_drift": as_float(summary, "energy_drift"),
         "failure_reason": summary.get("failure_reason", ""),
         "summary_file": str(summary_path.relative_to(ROOT)),
@@ -372,7 +401,11 @@ def benchmark_subtitle(rows: list[dict[str, str | int | float]]) -> str:
     if not rows:
         return ""
     first = rows[0]
-    problem = str(first["problem"]).replace("_", " ")
+    problems = sorted({str(row["problem"]) for row in rows})
+    if len(problems) == 1:
+        problem = problems[0].replace("_", " ")
+    else:
+        problem = "multiple problems"
     reconstruction = str(first["reconstruction"]).upper()
     limiter = str(first["limiter"])
     tfinal = first["tfinal"]
@@ -749,6 +782,10 @@ def main() -> int:
     parser.add_argument("--limiter", default="mc", choices=["minmod", "vanleer", "mc"])
     parser.add_argument("--tfinal", type=float, default=0.05)
     parser.add_argument("--diagnostic-stride", type=int, default=100)
+    parser.add_argument("--glm-ch-factor", type=float, default=4.0)
+    parser.add_argument("--glm-cd", type=float, default=None)
+    parser.add_argument("--glm-cr", type=float, default=None)
+    parser.add_argument("--glm-subcycles", type=int, default=1)
     parser.add_argument("--runner", default=str(DEFAULT_RUNNER))
     parser.add_argument(
         "--output-csv",
@@ -772,6 +809,21 @@ def main() -> int:
         raise SystemExit("--tfinal must be positive")
     if args.diagnostic_stride <= 0:
         raise SystemExit("--diagnostic-stride must be positive")
+    if args.glm_ch_factor <= 0.0:
+        raise SystemExit("--glm-ch-factor must be positive")
+    if args.glm_cd is not None and not (0.0 < args.glm_cd < 1.0):
+        raise SystemExit("--glm-cd must satisfy 0 < value < 1")
+    if args.glm_cr is not None and args.glm_cr <= 0.0:
+        raise SystemExit("--glm-cr must be positive")
+    if args.glm_cd is not None and args.glm_cr is not None:
+        raise SystemExit("set only one of --glm-cd or --glm-cr")
+    if args.glm_subcycles < 1:
+        raise SystemExit("--glm-subcycles must be >= 1")
+    effective_glm_cr = (
+        args.glm_cr
+        if args.glm_cr is not None or args.glm_cd is not None
+        else 0.1
+    )
     if any(n <= 0 for n in args.resolutions):
         raise SystemExit("--resolutions must be positive")
     if len(set(args.resolutions)) < 3:
@@ -810,15 +862,22 @@ def main() -> int:
                 args.reconstruction,
                 "--limiter",
                 args.limiter,
+                "--glm-ch-factor",
+                str(args.glm_ch_factor),
+                "--glm-subcycles",
+                str(args.glm_subcycles),
                 args.problem,
                 method,
             ]
+            if args.glm_cd is not None:
+                cmd[1:1] = ["--glm-cd", str(args.glm_cd)]
+            if effective_glm_cr is not None:
+                cmd[1:1] = ["--glm-cr", str(effective_glm_cr)]
             result = run(cmd, dry_run=args.dry_run, check=not args.continue_on_failure)
             if result is not None and result.returncode != 0:
                 message = f"{args.problem} {method} {n}^2 exited with code {result.returncode}"
                 failures.append(message)
                 print(f"WARNING: {message}")
-                continue
             if args.dry_run:
                 continue
             try:
@@ -849,8 +908,6 @@ def main() -> int:
                 )
                 failures.append(message)
                 print(f"WARNING: {message}")
-                if args.continue_on_failure:
-                    continue
             rows.append(row)
 
     if args.dry_run:

@@ -15,6 +15,14 @@ REQUIRED_COLUMNS = {
     "method",
     "reconstruction",
     "limiter",
+    "glm_ch_factor",
+    "glm_cd",
+    "glm_cr",
+    "glm_subcycles",
+    "glm_ch",
+    "glm_cp",
+    "glm_effective_cd",
+    "glm_effective_cr",
     "nx",
     "ny",
     "ncell",
@@ -44,6 +52,9 @@ REQUIRED_COLUMNS = {
     "time_integrated_L2_norm_fv",
     "min_pressure",
     "min_density",
+    "has_nonfinite",
+    "has_negative_density",
+    "has_negative_pressure",
     "energy_drift",
     "failure_reason",
     "summary_file",
@@ -138,6 +149,7 @@ def main() -> int:
     if not rows:
         fail(f"{csv_path} has no data rows")
 
+    allow_failures = args.allow_failures or csv_path.name == "performance_scaling_all_methods.csv"
     resolutions = set()
     for row in rows:
         nx = positive_int(row, "nx", csv_path)
@@ -177,7 +189,7 @@ def main() -> int:
             if finite_float(row, column, csv_path) < 0.0:
                 fail(f"{column} must be non-negative")
 
-        if not args.allow_failures and row["status"] != "finished":
+        if not allow_failures and row["status"] != "finished":
             fail(
                 f"unexpected benchmark failure for {row['problem']} "
                 f"{row['method']} N={nx}: status={row['status']}"

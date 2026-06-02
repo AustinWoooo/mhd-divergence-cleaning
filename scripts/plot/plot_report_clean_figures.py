@@ -140,6 +140,12 @@ PROBLEM_LABEL = {
     "divergence_advection": "Divergence advection",
 }
 
+PROBLEM_SCORECARD_LABEL = {
+    "orszag_tang": "Orszag-Tang",
+    "field_loop": "field-loop",
+    "divergence_advection": "divergence-advection",
+}
+
 GENERATED: list[str] = []
 SKIPPED: list[str] = []
 
@@ -492,29 +498,53 @@ def refresh_performance_divergence_metrics(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def load_performance_benchmark() -> pd.DataFrame | None:
+def load_performance_table() -> pd.DataFrame | None:
     path = RESULTS / "mhd_runner" / "performance" / "performance_scaling_all_methods.csv"
     df = read_csv(path)
     if df is None or df.empty:
         return None
     df = refresh_performance_divergence_metrics(df)
-    required = {"method", "nx", "total_wall_time_sec", "final_L2_norm_fv"}
+    required = {"problem", "method", "nx", "total_wall_time_sec", "final_L2_norm_fv"}
     if not required.issubset(df.columns):
         SKIPPED.append("performance benchmark lacks required columns")
         return None
-    max_n = int(pd.to_numeric(df["nx"], errors="coerce").max())
-    df = df[pd.to_numeric(df["nx"], errors="coerce") == max_n].copy()
+    df["problem"] = df["problem"].astype(str)
     df["method"] = df["method"].astype(str)
-    df = df[df["method"].isin(PERFORMANCE_METHODS)].copy()
-    df["_order"] = df["method"].map(lambda m: method_sort_key(m)[0])
+    return df
+
+
+def select_largest_resolution_benchmark(df: pd.DataFrame, problem: str) -> pd.DataFrame:
+    problem_df = df[df["problem"] == problem].copy()
+    if problem_df.empty:
+        return problem_df
+    nx = pd.to_numeric(problem_df["nx"], errors="coerce")
+    if nx.dropna().empty:
+        return problem_df.iloc[0:0].copy()
+    max_n = int(nx.max())
+    problem_df = problem_df[nx == max_n].copy()
+    problem_df = problem_df[problem_df["method"].isin(PERFORMANCE_METHODS)].copy()
+    problem_df["_order"] = problem_df["method"].map(lambda m: method_sort_key(m)[0])
+    problem_df = problem_df.sort_values(["_order", "method"])
+    return problem_df.drop_duplicates(subset=["method"], keep="last")
+
+
+def load_performance_benchmark() -> pd.DataFrame | None:
+    df = load_performance_table()
+    if df is None or df.empty:
+        return None
+    problem = "divergence_advection" if "divergence_advection" in set(df["problem"]) else str(df["problem"].iloc[0])
+    df = select_largest_resolution_benchmark(df, problem)
+    if df.empty:
+        return None
     return df.sort_values("_order")
 
 
-def plot_scorecard() -> None:
-    df = load_performance_benchmark()
-    if df is None or df.empty:
-        SKIPPED.append("method_scorecard: no compatible performance benchmark")
+def save_scorecard_figure(df: pd.DataFrame, problem: str, stem: str) -> None:
+    required = {"final_L2_norm_fv", "min_pressure", "energy_drift", "total_wall_time_sec", "method"}
+    if not required.issubset(df.columns):
+        SKIPPED.append(f"{stem}: missing required scorecard columns")
         return
+
     metrics = [
         ("final_L2_norm_fv", r"final normalized $L_2(\nabla\cdot B)$", "log"),
         ("min_pressure", "minimum pressure", "linear"),
@@ -542,15 +572,37 @@ def plot_scorecard() -> None:
     for ax in axes[-1, :]:
         ax.set_xticks(x)
         ax.set_xticklabels([LABELS[m] for m in methods], rotation=35, ha="right")
-    fig.suptitle("Method scorecard: divergence-advection performance benchmark", y=0.98)
+    title_problem = PROBLEM_SCORECARD_LABEL.get(problem, problem.replace("_", "-"))
+    fig.suptitle(f"Method scorecard: {title_problem} performance benchmark", y=0.98)
     fig.text(
         0.5,
         0.01,
-        "Same benchmark for all panels: divergence_advection, PLM/van Leer, largest available resolution in performance_scaling_all_methods.csv.",
+        f"Benchmark for all panels: {problem}, PLM/van Leer, largest available resolution in performance_scaling_all_methods.csv.",
         ha="center",
         fontsize=9,
     )
-    save(fig, "method_scorecard")
+    save(fig, stem)
+
+
+def plot_scorecard() -> None:
+    df = load_performance_table()
+    if df is None or df.empty:
+        SKIPPED.append("method_scorecard: no compatible performance benchmark")
+        return
+    problems = sorted(df["problem"].dropna().unique())
+    for problem in problems:
+        problem_df = select_largest_resolution_benchmark(df, str(problem))
+        if problem_df.empty:
+            SKIPPED.append(f"method_scorecard_{problem}: no largest-resolution rows")
+            continue
+        missing = [method for method in SCORECARD_METHODS if method not in set(problem_df["method"])]
+        if missing:
+            labels = ", ".join(LABELS.get(method, method) for method in missing)
+            SKIPPED.append(f"method_scorecard_{problem}: missing methods skipped: {labels}")
+        stem = f"method_scorecard_{problem}"
+        save_scorecard_figure(problem_df, str(problem), stem)
+        if problem == "divergence_advection":
+            save_scorecard_figure(problem_df, str(problem), "method_scorecard")
 
 
 def plot_divergence_energy_tradeoff() -> None:
@@ -682,14 +734,16 @@ def plot_robustness_heatmap() -> None:
         values="completed",
         aggfunc="last",
     )
-    problems = [p for p in ["orszag_tang", "field_loop", "divergence_advection"] if p in table.index]
-    methods = [m for m in METHOD_ORDER if m in table.columns]
-    table = table.loc[problems, methods]
+    problems = ["orszag_tang", "field_loop", "divergence_advection"]
+    methods = METHOD_ORDER
+    table = table.reindex(index=problems, columns=methods)
 
     fig, ax = plt.subplots(figsize=(1.0 * len(methods) + 2.5, 3.4))
     arr = table.to_numpy(dtype=float)
-    cmap = mcolors.ListedColormap(["#d95f02", "#1b9e77"])
-    im = ax.imshow(arr, vmin=0, vmax=1, cmap=cmap, aspect="auto")
+    plot_arr = np.where(np.isnan(arr), -1.0, arr)
+    cmap = mcolors.ListedColormap(["#bdbdbd", "#d95f02", "#1b9e77"])
+    norm = mcolors.BoundaryNorm([-1.5, -0.5, 0.5, 1.5], cmap.N)
+    im = ax.imshow(plot_arr, cmap=cmap, norm=norm, aspect="auto")
     ax.set_xticks(np.arange(len(methods)))
     ax.set_xticklabels([LABELS[m] for m in methods], rotation=35, ha="right")
     ax.set_yticks(np.arange(len(problems)))
@@ -698,10 +752,15 @@ def plot_robustness_heatmap() -> None:
     for j in range(len(problems)):
         for i in range(len(methods)):
             value = arr[j, i]
-            text = "pass" if value >= 0.5 else "fail"
-            ax.text(i, j, text, ha="center", va="center", fontsize=8, color="white", fontweight="bold")
-    cbar = fig.colorbar(im, ax=ax, shrink=0.8, ticks=[0, 1])
-    cbar.ax.set_yticklabels(["failed", "completed"])
+            if np.isnan(value):
+                text = "N/A"
+                color = "black"
+            else:
+                text = "pass" if value >= 0.5 else "fail"
+                color = "white"
+            ax.text(i, j, text, ha="center", va="center", fontsize=8, color=color, fontweight="bold")
+    cbar = fig.colorbar(im, ax=ax, shrink=0.8, ticks=[-1, 0, 1])
+    cbar.ax.set_yticklabels(["N/A / no data", "failed", "completed"])
     save(fig, "robustness_problem_method")
 
 

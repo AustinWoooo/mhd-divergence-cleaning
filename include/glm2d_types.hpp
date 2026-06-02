@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <string>
 
 enum class CleaningEnergyPolicy {
@@ -31,6 +32,24 @@ struct GLM2DParams {
     //   exp[-dt * ch^2 / cp^2].
     double ch = 1.0;
     double cp = 0.2;
+
+    // Paper-consistent GLM tuning controls.
+    //
+    // ch is set by the runner from an initial signal-speed estimate, then scaled
+    // as ch = glm_ch_factor * ch_base.
+    //
+    // Mixed GLM-family damping may be specified in one of two equivalent ways:
+    //
+    //   glm_cd: retained psi fraction per cleaning substep,
+    //           cd = exp[-dt * ch^2 / cp^2]
+    //   glm_cr: Dedner-style ratio cr = cp^2 / ch
+    //
+    // If neither is set, the existing cp default is used unchanged.
+    // Pure hyperbolic GLM ignores damping controls.
+    double glm_ch_factor = 4.0;
+    double glm_cd = std::numeric_limits<double>::quiet_NaN();
+    double glm_cr = 0.1;
+    int glm_subcycles = 1;
 
     CleaningEnergyPolicy energy_policy =
         CleaningEnergyPolicy::ConserveTotalEnergy;

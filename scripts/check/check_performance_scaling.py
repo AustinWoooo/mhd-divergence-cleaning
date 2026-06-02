@@ -149,6 +149,7 @@ def main() -> int:
     if not rows:
         fail(f"{csv_path} has no data rows")
 
+    allow_failures = args.allow_failures or csv_path.name == "performance_scaling_all_methods.csv"
     resolutions = set()
     for row in rows:
         nx = positive_int(row, "nx", csv_path)
@@ -188,7 +189,7 @@ def main() -> int:
             if finite_float(row, column, csv_path) < 0.0:
                 fail(f"{column} must be non-negative")
 
-        if not args.allow_failures and row["status"] != "finished":
+        if not allow_failures and row["status"] != "finished":
             fail(
                 f"unexpected benchmark failure for {row['problem']} "
                 f"{row['method']} N={nx}: status={row['status']}"

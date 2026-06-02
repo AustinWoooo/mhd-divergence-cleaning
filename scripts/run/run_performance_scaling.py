@@ -401,7 +401,11 @@ def benchmark_subtitle(rows: list[dict[str, str | int | float]]) -> str:
     if not rows:
         return ""
     first = rows[0]
-    problem = str(first["problem"]).replace("_", " ")
+    problems = sorted({str(row["problem"]) for row in rows})
+    if len(problems) == 1:
+        problem = problems[0].replace("_", " ")
+    else:
+        problem = "multiple problems"
     reconstruction = str(first["reconstruction"]).upper()
     limiter = str(first["limiter"])
     tfinal = first["tfinal"]
@@ -874,7 +878,6 @@ def main() -> int:
                 message = f"{args.problem} {method} {n}^2 exited with code {result.returncode}"
                 failures.append(message)
                 print(f"WARNING: {message}")
-                continue
             if args.dry_run:
                 continue
             try:
@@ -905,8 +908,6 @@ def main() -> int:
                 )
                 failures.append(message)
                 print(f"WARNING: {message}")
-                if args.continue_on_failure:
-                    continue
             rows.append(row)
 
     if args.dry_run:

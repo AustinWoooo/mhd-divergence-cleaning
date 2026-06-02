@@ -103,8 +103,13 @@ CSV_FIELDS = [
     "cell_updates_per_second",
     "cleaning_subcycles_total",
     "projection_iterations_total",
+    "final_L2_fv",
+    "final_Linf_fv",
     "final_L2_norm_fv",
     "final_Linf_norm_fv",
+    "peak_L2_norm_fv",
+    "peak_Linf_norm_fv",
+    "time_integrated_L2_norm_fv",
     "min_pressure",
     "min_density",
     "energy_drift",
@@ -173,6 +178,87 @@ def as_int(row: dict[str, str], key: str, default: int = 0) -> int:
     return int(round(value))
 
 
+def read_divergence_metrics(path: Path) -> dict[str, float]:
+    metrics = {
+        "final_L2_norm_fv": math.nan,
+        "final_Linf_norm_fv": math.nan,
+        "peak_L2_norm_fv": math.nan,
+        "peak_Linf_norm_fv": math.nan,
+        "time_integrated_L2_norm_fv": math.nan,
+    }
+    if not path.exists():
+        print(
+            f"WARNING: missing divergence diagnostic CSV {path}; "
+            "normalized divergence metrics set to NaN"
+        )
+        return metrics
+
+    try:
+        with path.open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError as exc:
+        print(
+            f"WARNING: could not read divergence diagnostic CSV {path}: {exc}; "
+            "normalized divergence metrics set to NaN"
+        )
+        return metrics
+
+    if not rows:
+        print(
+            f"WARNING: divergence diagnostic CSV {path} has no rows; "
+            "normalized divergence metrics set to NaN"
+        )
+        return metrics
+
+    required = {"time", "L2_norm_fv"}
+    missing = required.difference(rows[0].keys())
+    if missing:
+        print(
+            f"WARNING: divergence diagnostic CSV {path} missing columns "
+            f"{', '.join(sorted(missing))}; normalized divergence metrics set to NaN"
+        )
+        return metrics
+    has_linf = "Linf_norm_fv" in rows[0]
+    if not has_linf:
+        print(
+            f"WARNING: divergence diagnostic CSV {path} missing column Linf_norm_fv; "
+            "Linf normalized divergence metrics set to NaN"
+        )
+
+    times = [as_float(row, "time") for row in rows]
+    l2_values = [as_float(row, "L2_norm_fv") for row in rows]
+
+    metrics["final_L2_norm_fv"] = l2_values[-1]
+
+    finite_l2 = [value for value in l2_values if math.isfinite(value)]
+    if finite_l2:
+        metrics["peak_L2_norm_fv"] = max(finite_l2)
+
+    if has_linf:
+        linf_values = [as_float(row, "Linf_norm_fv") for row in rows]
+        metrics["final_Linf_norm_fv"] = linf_values[-1]
+        finite_linf = [value for value in linf_values if math.isfinite(value)]
+        if finite_linf:
+            metrics["peak_Linf_norm_fv"] = max(finite_linf)
+
+    integral = 0.0
+    have_interval = False
+    for i in range(1, len(rows)):
+        t0 = times[i - 1]
+        t1 = times[i]
+        y0 = l2_values[i - 1]
+        y1 = l2_values[i]
+        if all(math.isfinite(value) for value in (t0, t1, y0, y1)):
+            integral += 0.5 * (y0 + y1) * (t1 - t0)
+            have_interval = True
+    if have_interval:
+        metrics["time_integrated_L2_norm_fv"] = integral
+    elif len(rows) == 1 and math.isfinite(l2_values[0]):
+        metrics["time_integrated_L2_norm_fv"] = 0.0
+
+    return metrics
+
+
 def make_performance_row(
     summary: dict[str, str],
     summary_path: Path,
@@ -186,6 +272,7 @@ def make_performance_row(
 ) -> dict[str, str | int | float]:
     canonical = canonical_method(method)
     diagnostic_path = DIV_DIR / f"{prefix}_{canonical}.csv"
+    divergence_metrics = read_divergence_metrics(diagnostic_path)
     ncell = n * n
 
     row = {
@@ -213,8 +300,13 @@ def make_performance_row(
         "cell_updates_per_second": as_float(summary, "cell_updates_per_second"),
         "cleaning_subcycles_total": as_int(summary, "cleaning_subcycles_total"),
         "projection_iterations_total": as_int(summary, "projection_iterations_total"),
-        "final_L2_norm_fv": as_float(summary, "final_L2_fv"),
-        "final_Linf_norm_fv": as_float(summary, "final_Linf_fv"),
+        "final_L2_fv": as_float(summary, "final_L2_fv"),
+        "final_Linf_fv": as_float(summary, "final_Linf_fv"),
+        "final_L2_norm_fv": divergence_metrics["final_L2_norm_fv"],
+        "final_Linf_norm_fv": divergence_metrics["final_Linf_norm_fv"],
+        "peak_L2_norm_fv": divergence_metrics["peak_L2_norm_fv"],
+        "peak_Linf_norm_fv": divergence_metrics["peak_Linf_norm_fv"],
+        "time_integrated_L2_norm_fv": divergence_metrics["time_integrated_L2_norm_fv"],
         "min_pressure": as_float(summary, "min_pressure"),
         "min_density": as_float(summary, "min_density"),
         "energy_drift": as_float(summary, "energy_drift"),

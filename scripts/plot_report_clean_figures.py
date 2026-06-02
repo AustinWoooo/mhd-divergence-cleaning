@@ -450,11 +450,54 @@ def load_mhd_runner_summary() -> pd.DataFrame | None:
     return read_csv(FIGURES / "mhd_runner" / "mhd_runner_summary.csv")
 
 
+def refresh_performance_divergence_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    if "diagnostic_file" not in df.columns:
+        return df
+
+    out = df.copy()
+    for idx, row in out.iterrows():
+        diag_value = row.get("diagnostic_file", "")
+        if not isinstance(diag_value, str) or not diag_value:
+            continue
+        diag_path = Path(diag_value)
+        if not diag_path.is_absolute():
+            diag_path = Path(diag_value)
+        if not diag_path.exists():
+            continue
+        try:
+            div = pd.read_csv(diag_path)
+        except Exception:
+            continue
+        if div.empty or not {"time", "L2_norm_fv", "Linf_norm_fv"}.issubset(div.columns):
+            continue
+
+        l2 = pd.to_numeric(div["L2_norm_fv"], errors="coerce")
+        linf = pd.to_numeric(div["Linf_norm_fv"], errors="coerce")
+        time = pd.to_numeric(div["time"], errors="coerce")
+
+        out.at[idx, "final_L2_norm_fv"] = l2.iloc[-1]
+        out.at[idx, "final_Linf_norm_fv"] = linf.iloc[-1]
+        out.at[idx, "peak_L2_norm_fv"] = l2.max()
+        out.at[idx, "peak_Linf_norm_fv"] = linf.max()
+
+        valid = pd.DataFrame({"time": time, "l2": l2}).dropna()
+        if len(valid) >= 2:
+            out.at[idx, "time_integrated_L2_norm_fv"] = np.trapezoid(
+                valid["l2"].to_numpy(),
+                valid["time"].to_numpy(),
+            )
+        elif len(valid) == 1:
+            out.at[idx, "time_integrated_L2_norm_fv"] = 0.0
+
+    return out
+
+
 def load_performance_benchmark() -> pd.DataFrame | None:
     path = RESULTS / "mhd_runner" / "performance" / "performance_scaling_all_methods.csv"
     df = read_csv(path)
     if df is None or df.empty:
         return None
+    df = refresh_performance_divergence_metrics(df)
     required = {"method", "nx", "total_wall_time_sec", "final_L2_norm_fv"}
     if not required.issubset(df.columns):
         SKIPPED.append("performance benchmark lacks required columns")

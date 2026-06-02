@@ -16,7 +16,8 @@ namespace {
 const std::vector<std::string> PROBLEMS = {
     "orszag_tang",
     "field_loop",
-    "divergence_advection"
+    "divergence_advection",
+    "blast_wave"
 };
 
 const std::vector<std::string> METHODS = {
@@ -55,7 +56,7 @@ void print_usage(const char* prog) {
         << " [--reconstruction pcm|plm] [--limiter minmod|vanleer|mc]"
         << " [--nx N] [--ny N] [--tfinal T] [--output-prefix PREFIX]"
         << " [problem] [cleaning...]\n\n"
-        << "Problems: orszag_tang | field_loop | divergence_advection\n"
+        << "Problems: orszag_tang | field_loop | divergence_advection | blast_wave\n"
         << "Cleaning methods: none | hyperbolic_glm | mixed_glm | parabolic | "
         << "elliptic_projection | powell_source | powell_source_subcycled | "
         << "powell_source_limited | eglm | mixed_eglm | gi_mixed_eglm\n\n"
@@ -105,11 +106,13 @@ std::string default_prefix_for_problem(const std::string& problem) {
     if (problem == "orszag_tang") return "mhd_ot";
     if (problem == "field_loop") return "mhd_fl";
     if (problem == "divergence_advection") return "mhd_da";
+    if (problem == "blast_wave") return "mhd_blast";
     throw std::invalid_argument("unknown problem: " + problem);
 }
 
 double default_tfinal_for_problem(const std::string& problem) {
-    (void)problem;
+    // Stop the blast before its fast shock reaches the periodic boundary.
+    if (problem == "blast_wave") return 0.2;
     return 0.5;
 }
 

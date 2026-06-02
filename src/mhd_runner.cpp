@@ -2181,6 +2181,92 @@ void initialize_divergence_advection_2d(
     }
 }
 
+// -----------------------------------------------------------------------------
+//  2D MHD blast wave (Balsara & Spicer 1999).
+//
+//  A circular over-pressured core (P_blast) sits in a uniform, strongly
+//  magnetized ambient medium (P_ambient, B0 at 45 deg). The resulting fast
+//  shock expands anisotropically -- fast along B, retarded across it -- so the
+//  magnetic tension visibly deforms the blast. The strong-field, low-beta
+//  ambient state and the steep pressure jump make this a demanding divB-cleaning
+//  test (the GLM psi field must shed the divB generated at the shock).
+//
+//  Boundaries: the runner is periodic (compute_rhs_blended_2d). Choose t_end so
+//  the shock does not reach the domain edge; t_end ~ 0.2 on the unit square with
+//  the defaults below keeps it interior.
+//
+//  All setup constants are gathered here so the case is easy to retune.
+// -----------------------------------------------------------------------------
+void initialize_blast_wave_2d(
+    std::vector<State>& U,
+    const MHDRunParams& params
+) {
+    const int nx = params.glm.nx;
+    const int ny = params.glm.ny;
+    const double dx = params.glm.dx;
+    const double dy = params.glm.dy;
+    const double gamma = params.gamma;
+
+    if (static_cast<int>(U.size()) != nx * ny) {
+        throw std::runtime_error("initialize_blast_wave_2d: U size mismatch.");
+    }
+
+    // -- Tunable setup constants ---------------------------------------------
+    // Blast centre, placed at the geometric centre of the domain so the test
+    // works unchanged for [0, xlen] x [0, ylen] of any size.
+    const double xc = 0.5 * params.glm.xlen;
+    const double yc = 0.5 * params.glm.ylen;
+
+    const double R_blast = 0.1;  // radius of the over-pressured core
+
+    // Ambient (background) medium.
+    const double rho0 = 1.0;
+    const double u0   = 0.0;
+    const double v0   = 0.0;
+    const double w0   = 0.0;
+    const double p_ambient = 0.1;
+
+    // Strong uniform magnetic field at 45 deg in the x-y plane (|B0| = 1).
+    const double B0 = 1.0;
+    const double Bx0 = B0 / std::sqrt(2.0);
+    const double By0 = B0 / std::sqrt(2.0);
+    const double Bz0 = 0.0;
+
+    // Over-pressured core (same rho, v, B as the ambient -- pressure only).
+    const double p_blast = 10.0;
+
+    const double psi0 = 0.0;  // GLM scalar starts divergence-free
+    // ------------------------------------------------------------------------
+
+    const double R2 = R_blast * R_blast;
+
+    for (int j = 0; j < ny; ++j) {
+        const double y = (j + 0.5) * dy;
+        for (int i = 0; i < nx; ++i) {
+            const double x = (i + 0.5) * dx;
+            const double rx = x - xc;
+            const double ry = y - yc;
+            const double r2 = rx * rx + ry * ry;
+
+            const double p = (r2 < R2) ? p_blast : p_ambient;
+
+            const PrimState W(
+                rho0,
+                u0,
+                v0,
+                w0,
+                p,
+                Bx0,
+                By0,
+                Bz0,
+                psi0
+            );
+
+            U[idx2d(i, j, nx)] = prim_to_state(W, gamma);
+        }
+    }
+}
+
 // =============================================================================
 //  Main runner: RK2(HLLD) + GLM cleaning, with divB diagnostics.
 // =============================================================================
@@ -2220,6 +2306,8 @@ void run_mhd_2d_case(
         initialize_field_loop_2d(U, params);
     } else if (params.problem == "divergence_advection") {
         initialize_divergence_advection_2d(U, params);
+    } else if (params.problem == "blast_wave") {
+        initialize_blast_wave_2d(U, params);
     } else {
         throw std::invalid_argument(
             "run_mhd_2d_case: unknown problem '" + params.problem + "'"

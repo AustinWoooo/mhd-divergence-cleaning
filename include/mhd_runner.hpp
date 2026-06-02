@@ -70,6 +70,11 @@ void initialize_divergence_advection_2d(
     const MHDRunParams& params
 );
 
+void initialize_blast_wave_2d(
+    std::vector<State>& U,
+    const MHDRunParams& params
+);
+
 void run_mhd_2d_case(
     CleaningType type,
     MHDRunParams params

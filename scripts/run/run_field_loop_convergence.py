@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""
+Run field-loop convergence and PCM-vs-PLM evidence cases.
+
+Outputs:
+  results/mhd_runner/convergence/field_loop_convergence.csv
+  figures/mhd_runner/convergence/field_loop_convergence.png
+  results/mhd_runner/hrsc/pcm_vs_plm_summary.csv
+  figures/mhd_runner/divB/pcm_vs_plm_divB.png
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import math
+import subprocess
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BUILD_DIR = ROOT / "build"
+EXE = BUILD_DIR / "test_mhd_runner"
+RESULTS_DIR = ROOT / "results" / "mhd_runner"
+DIV_DIR = RESULTS_DIR / "divergence"
+SNAP_DIR = RESULTS_DIR / "snapshots"
+CONV_DIR = RESULTS_DIR / "convergence"
+HRSC_DIR = RESULTS_DIR / "hrsc"
+FIG_CONV_DIR = ROOT / "figures" / "mhd_runner" / "convergence"
+FIG_DIVB_DIR = ROOT / "figures" / "mhd_runner" / "divB"
+
+TFINAL = 0.5
+FIELD_LOOP_RADIUS = 0.15
+FIELD_LOOP_A0 = 1.0e-3
+CLEANING_METHOD = "mixed_glm"
+
+
+def run(cmd: list[str]) -> None:
+    print(" ".join(cmd))
+    subprocess.run(cmd, cwd=ROOT, check=True)
+
+
+def ensure_build(skip_build: bool) -> None:
+    if skip_build and EXE.exists():
+        return
+    if not (BUILD_DIR / "CMakeCache.txt").exists():
+        run(["cmake", "-S", ".", "-B", "build"])
+    run(["cmake", "--build", "build", "--target", "test_mhd_runner", "--parallel"])
+
+
+def periodic_delta(x: np.ndarray, center: float) -> np.ndarray:
+    return (x - center + 0.5) % 1.0 - 0.5
+
+
+def exact_field_loop(x: np.ndarray, y: np.ndarray, tfinal: float) -> tuple[np.ndarray, np.ndarray]:
+    cx = (0.5 + tfinal) % 1.0
+    cy = (0.5 + tfinal) % 1.0
+    rx = periodic_delta(x, cx)
+    ry = periodic_delta(y, cy)
+    r = np.sqrt(rx * rx + ry * ry)
+    inside = (r > 0.0) & (r < FIELD_LOOP_RADIUS)
+    bx = np.zeros_like(x)
+    by = np.zeros_like(y)
+    bx[inside] = -FIELD_LOOP_A0 * ry[inside] / r[inside]
+    by[inside] = FIELD_LOOP_A0 * rx[inside] / r[inside]
+    return bx, by
+
+
+def l2_errors(snapshot: Path, tfinal: float) -> tuple[float, float]:
+    df = pd.read_csv(snapshot)
+    bx_exact, by_exact = exact_field_loop(df["x"].to_numpy(), df["y"].to_numpy(), tfinal)
+    bx = df["Bx"].to_numpy()
+    by = df["By"].to_numpy()
+    bmag = np.sqrt(bx * bx + by * by)
+    bmag_exact = np.sqrt(bx_exact * bx_exact + by_exact * by_exact)
+    vector_l2 = float(np.sqrt(np.mean((bx - bx_exact) ** 2 + (by - by_exact) ** 2)))
+    bmag_l2 = float(np.sqrt(np.mean((bmag - bmag_exact) ** 2)))
+    return vector_l2, bmag_l2
+
+
+def estimate_slope(rows: list[dict[str, float]]) -> float:
+    xs = np.array([row["dx"] for row in rows], dtype=float)
+    ys = np.array([row["l2_B_vector"] for row in rows], dtype=float)
+    mask = np.isfinite(xs) & np.isfinite(ys) & (xs > 0.0) & (ys > 0.0)
+    if int(mask.sum()) < 2:
+        return float("nan")
+    coeff = np.polyfit(np.log(xs[mask]), np.log(ys[mask]), 1)
+    return float(coeff[0])
+
+
+def run_field_loop(reconstruction: str, n: int) -> str:
+    prefix = f"mhd_fl_conv_{reconstruction}_n{n}"
+    run(
+        [
+            str(EXE),
+            "--nx",
+            str(n),
+            "--ny",
+            str(n),
+            "--tfinal",
+            str(TFINAL),
+            "--output-prefix",
+            prefix,
+            "--reconstruction",
+            reconstruction,
+            "field_loop",
+            CLEANING_METHOD,
+        ]
+    )
+    return prefix
+
+
+def write_convergence_csv(rows: list[dict[str, float]]) -> Path:
+    out = CONV_DIR / "field_loop_convergence.csv"
+    CONV_DIR.mkdir(parents=True, exist_ok=True)
+    fields = [
+        "reconstruction",
+        "N",
+        "dx",
+        "tfinal",
+        "l2_B_vector",
+        "l2_Bmag",
+        "estimated_slope",
+        "snapshot",
+    ]
+    with out.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Wrote {out}")
+    return out
+
+
+def plot_convergence(df: pd.DataFrame) -> Path:
+    FIG_CONV_DIR.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(7.2, 5.0))
+    for reconstruction, group in df.groupby("reconstruction"):
+        group = group.sort_values("dx")
+        slope = float(group["estimated_slope"].iloc[0])
+        ax.loglog(
+            group["dx"],
+            group["l2_B_vector"],
+            marker="o",
+            lw=1.8,
+            label=f"{reconstruction.upper()} slope={slope:.2f}",
+        )
+    ax.invert_xaxis()
+    ax.set_xlabel("dx")
+    ax.set_ylabel(r"$L_2$ error in $(B_x,B_y)$")
+    ax.set_title("Field-loop advection convergence against periodic exact shift")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    out = FIG_CONV_DIR / "field_loop_convergence.png"
+    fig.tight_layout()
+    fig.savefig(out, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {out}")
+    return out
+
+
+def final_value(df: pd.DataFrame, column: str) -> float:
+    if column not in df.columns or len(df) == 0:
+        return float("nan")
+    return float(df[column].iloc[-1])
+
+
+def write_hrsc_summary() -> Path:
+    HRSC_DIR.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for reconstruction in ("pcm", "plm"):
+        prefix = f"mhd_fl_conv_{reconstruction}_n128"
+        diag_path = DIV_DIR / f"{prefix}_{CLEANING_METHOD}.csv"
+        if not diag_path.exists():
+            raise FileNotFoundError(diag_path)
+        df = pd.read_csv(diag_path)
+        energy0 = float(df["total_energy"].iloc[0])
+        energy1 = final_value(df, "total_energy")
+        rows.append(
+            {
+                "problem": "field_loop",
+                "method": CLEANING_METHOD,
+                "reconstruction": reconstruction,
+                "N": 128,
+                "final_time": final_value(df, "time"),
+                "final_L2_norm_fv": final_value(df, "L2_norm_fv"),
+                "min_pressure": float(df["min_pressure"].min()),
+                "energy_drift": (energy1 - energy0) / max(abs(energy0), 1.0e-30),
+                "diagnostic_file": str(diag_path.relative_to(ROOT)),
+            }
+        )
+
+    out = HRSC_DIR / "pcm_vs_plm_summary.csv"
+    pd.DataFrame(rows).to_csv(out, index=False)
+    print(f"Wrote {out}")
+    return out
+
+
+def plot_hrsc_comparison() -> Path:
+    FIG_DIVB_DIR.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(7.4, 4.8))
+    styles = {"pcm": ("#d62728", "--"), "plm": ("#2ca02c", "-")}
+    for reconstruction in ("pcm", "plm"):
+        prefix = f"mhd_fl_conv_{reconstruction}_n128"
+        df = pd.read_csv(DIV_DIR / f"{prefix}_{CLEANING_METHOD}.csv")
+        color, ls = styles[reconstruction]
+        ax.semilogy(
+            df["time"],
+            df["L2_norm_fv"],
+            color=color,
+            ls=ls,
+            lw=2.0,
+            label=reconstruction.upper(),
+        )
+    ax.set_xlabel("time")
+    ax.set_ylabel(r"$L_2$ normalized FV $\nabla\cdot B$")
+    ax.set_title("Field-loop PCM vs PLM reconstruction")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    out = FIG_DIVB_DIR / "pcm_vs_plm_divB.png"
+    fig.tight_layout()
+    fig.savefig(out, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {out}")
+    return out
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--resolutions",
+        nargs="+",
+        type=int,
+        default=[32, 64, 128, 256],
+        help="Field-loop resolutions to run.",
+    )
+    parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Use an existing build/test_mhd_runner if present.",
+    )
+    args = parser.parse_args()
+
+    ensure_build(args.skip_build)
+
+    rows_by_reconstruction: dict[str, list[dict[str, float]]] = {"pcm": [], "plm": []}
+    for reconstruction in ("pcm", "plm"):
+        for n in args.resolutions:
+            prefix = run_field_loop(reconstruction, n)
+            snapshot = SNAP_DIR / f"{prefix}_{CLEANING_METHOD}_final.csv"
+            if not snapshot.exists():
+                raise FileNotFoundError(snapshot)
+            vector_l2, bmag_l2 = l2_errors(snapshot, TFINAL)
+            rows_by_reconstruction[reconstruction].append(
+                {
+                    "reconstruction": reconstruction,
+                    "N": n,
+                    "dx": 1.0 / float(n),
+                    "tfinal": TFINAL,
+                    "l2_B_vector": vector_l2,
+                    "l2_Bmag": bmag_l2,
+                    "estimated_slope": float("nan"),
+                    "snapshot": str(snapshot.relative_to(ROOT)),
+                }
+            )
+
+    rows: list[dict[str, float]] = []
+    for reconstruction, group in rows_by_reconstruction.items():
+        slope = estimate_slope(group)
+        for row in group:
+            row["estimated_slope"] = slope
+            rows.append(row)
+        print(f"{reconstruction.upper()} convergence slope: {slope:.3f}")
+
+    csv_path = write_convergence_csv(rows)
+    df = pd.read_csv(csv_path)
+    plot_convergence(df)
+    write_hrsc_summary()
+    plot_hrsc_comparison()
+
+
+if __name__ == "__main__":
+    main()

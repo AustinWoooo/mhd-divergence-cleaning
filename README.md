@@ -320,8 +320,10 @@ total_wall_time_sec,initialization_time_sec,hydro_time_sec,cleaning_time_sec,
 diagnostics_compute_time_sec,diagnostics_write_time_sec,snapshot_write_time_sec,
 summary_write_time_sec,output_time_sec,total_cell_updates,seconds_per_step,
 cell_updates_per_second,cleaning_subcycles_total,projection_iterations_total,
-final_L2_norm_fv,final_Linf_norm_fv,min_pressure,min_density,energy_drift,
-failure_reason,summary_file,diagnostic_file
+final_L2_fv,final_Linf_fv,final_L2_norm_fv,final_Linf_norm_fv,
+peak_L2_norm_fv,peak_Linf_norm_fv,time_integrated_L2_norm_fv,
+min_pressure,min_density,energy_drift,failure_reason,summary_file,
+diagnostic_file
 ```
 
 `cell_updates_per_second` is computed as:

@@ -11,8 +11,14 @@
 - figures/report_clean/field_loop_divergence.pdf
 - figures/report_clean/divergence_advection_divergence.png
 - figures/report_clean/divergence_advection_divergence.pdf
+- figures/report_clean/method_scorecard_divergence_advection.png
+- figures/report_clean/method_scorecard_divergence_advection.pdf
 - figures/report_clean/method_scorecard.png
 - figures/report_clean/method_scorecard.pdf
+- figures/report_clean/method_scorecard_field_loop.png
+- figures/report_clean/method_scorecard_field_loop.pdf
+- figures/report_clean/method_scorecard_orszag_tang.png
+- figures/report_clean/method_scorecard_orszag_tang.pdf
 - figures/report_clean/divergence_energy_tradeoff.png
 - figures/report_clean/divergence_energy_tradeoff.pdf
 - figures/report_clean/accuracy_cost_pareto.png

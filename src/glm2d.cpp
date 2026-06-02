@@ -50,6 +50,27 @@ void validate_glm_2d_params(const GLM2DParams& params) {
         throw std::invalid_argument("GLM2DParams: cp must be positive.");
     }
 
+    if (params.glm_ch_factor <= 0.0) {
+        throw std::invalid_argument("GLM2DParams: glm_ch_factor must be positive.");
+    }
+
+    if (std::isfinite(params.glm_cd) &&
+        !(params.glm_cd > 0.0 && params.glm_cd < 1.0)) {
+        throw std::invalid_argument("GLM2DParams: glm_cd must satisfy 0 < glm_cd < 1.");
+    }
+
+    if (std::isfinite(params.glm_cr) && !(params.glm_cr > 0.0)) {
+        throw std::invalid_argument("GLM2DParams: glm_cr must be positive.");
+    }
+
+    if (std::isfinite(params.glm_cd) && std::isfinite(params.glm_cr)) {
+        throw std::invalid_argument("GLM2DParams: set only one of glm_cd or glm_cr.");
+    }
+
+    if (params.glm_subcycles < 1) {
+        throw std::invalid_argument("GLM2DParams: glm_subcycles must be >= 1.");
+    }
+
     if (params.poisson_max_iter <= 0) {
         throw std::invalid_argument("GLM2DParams: poisson_max_iter must be positive.");
     }

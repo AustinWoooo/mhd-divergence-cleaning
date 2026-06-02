@@ -121,6 +121,10 @@ struct BadStateRecord {
 
 struct CleaningAdvanceStats {
     int subcycles = 0;
+    double actual_ch = std::numeric_limits<double>::quiet_NaN();
+    double actual_cp = std::numeric_limits<double>::quiet_NaN();
+    double effective_cd = std::numeric_limits<double>::quiet_NaN();
+    double effective_cr = std::numeric_limits<double>::quiet_NaN();
     int projection_iterations = 0;
     double projection_solver_update_residual =
         std::numeric_limits<double>::quiet_NaN();
@@ -829,6 +833,73 @@ void write_optional_double(std::ostream& out, double value) {
     }
 }
 
+bool is_glm_cleaning(CleaningType type) {
+    return type == CleaningType::HYPERBOLIC_GLM
+        || type == CleaningType::MIXED_GLM
+        || type == CleaningType::MIXED_EGLM
+        || type == CleaningType::GI_MIXED_EGLM;
+}
+
+bool uses_glm_damping(CleaningType type) {
+    return type == CleaningType::MIXED_GLM
+        || type == CleaningType::MIXED_EGLM
+        || type == CleaningType::GI_MIXED_EGLM;
+}
+
+void validate_glm_tuning_params(const GLM2DParams& params) {
+    if (params.glm_ch_factor <= 0.0) {
+        throw std::invalid_argument("glm_ch_factor must be positive");
+    }
+    if (std::isfinite(params.glm_cd) &&
+        !(params.glm_cd > 0.0 && params.glm_cd < 1.0)) {
+        throw std::invalid_argument("glm_cd must satisfy 0 < glm_cd < 1");
+    }
+    if (std::isfinite(params.glm_cr) && !(params.glm_cr > 0.0)) {
+        throw std::invalid_argument("glm_cr must be positive");
+    }
+    if (std::isfinite(params.glm_cd) && std::isfinite(params.glm_cr)) {
+        throw std::invalid_argument("set only one of glm_cd or glm_cr");
+    }
+    if (params.glm_subcycles < 1) {
+        throw std::invalid_argument("glm_subcycles must be >= 1");
+    }
+}
+
+double cp_from_cd(double cd, double ch, double dt) {
+    return std::sqrt(-(dt * ch * ch) / std::log(cd));
+}
+
+double effective_glm_cd(double cp, double ch, double dt) {
+    return std::exp(-dt * ch * ch / (cp * cp));
+}
+
+void apply_glm_damping_parameterization(
+    CleaningType type,
+    GLM2DParams& params,
+    double dt_clean,
+    CleaningAdvanceStats& stats
+) {
+    if (!is_glm_cleaning(type)) {
+        return;
+    }
+
+    stats.actual_ch = params.ch;
+
+    if (!uses_glm_damping(type)) {
+        return;
+    }
+
+    if (std::isfinite(params.glm_cd)) {
+        params.cp = cp_from_cd(params.glm_cd, params.ch, dt_clean);
+    } else if (std::isfinite(params.glm_cr)) {
+        params.cp = std::sqrt(params.glm_cr * params.ch);
+    }
+
+    stats.actual_cp = params.cp;
+    stats.effective_cd = effective_glm_cd(params.cp, params.ch, dt_clean);
+    stats.effective_cr = params.cp * params.cp / params.ch;
+}
+
 bool benefits_from_hydro_retry(CleaningType type) {
     return type == CleaningType::PARABOLIC
         || type == CleaningType::ELLIPTIC_PROJECTION;
@@ -1152,8 +1223,14 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
     if (std::isfinite(dt_clean) && dt_clean > 0.0 && dt_mhd > dt_clean) {
         nsub = static_cast<int>(std::ceil(dt_mhd / dt_clean));
     }
+    if (is_glm_cleaning(type)) {
+        nsub = std::max(nsub, params.glm_subcycles);
+    }
 
     stats.subcycles = nsub;
+    if (is_glm_cleaning(type)) {
+        stats.actual_ch = params.ch;
+    }
 
     if (type == CleaningType::PARABOLIC &&
         nsub > 1 &&
@@ -1166,6 +1243,7 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
 
     for (int sub = 0; sub < nsub; ++sub) {
         params.dt = dt_sub;
+        apply_glm_damping_parameterization(type, params, dt_sub, stats);
 
         std::vector<State> Uold;
         std::vector<State> Ubefore_powell;
@@ -1905,6 +1983,10 @@ void write_mhd_run_summary(
     double projection_theta,
     int retry_count,
     double min_dt_used,
+    double actual_ch,
+    double actual_cp,
+    double effective_cd,
+    double effective_cr,
     long long powell_limited_total_cells,
     int powell_limited_max_cells_per_step,
     double powell_limited_theta_min_global,
@@ -1947,6 +2029,8 @@ void write_mhd_run_summary(
         << "min_pressure_after_cleaning_B,min_pressure_after_energy_repair,"
         << "min_pressure_after_full_step,"
         << "projection_theta,retry_count,min_dt_used,"
+        << "glm_ch_factor,glm_cd,glm_cr,glm_subcycles,"
+        << "glm_ch,glm_cp,glm_effective_cd,glm_effective_cr,"
         << "powell_limited_total_cells,"
         << "powell_limited_max_cells_per_step,"
         << "powell_limited_theta_min_global,"
@@ -2008,6 +2092,26 @@ void write_mhd_run_summary(
         << "," << retry_count
         << ",";
     write_optional_double(out, min_dt_used);
+    const bool glm_damping_active = std::isfinite(actual_cp);
+
+    out << ","
+        << params.glm.glm_ch_factor << ",";
+    write_optional_double(out, (glm_damping_active && std::isfinite(params.glm.glm_cd))
+        ? params.glm.glm_cd
+        : std::numeric_limits<double>::quiet_NaN());
+    out << ",";
+    write_optional_double(out, (glm_damping_active && std::isfinite(params.glm.glm_cr))
+        ? params.glm.glm_cr
+        : std::numeric_limits<double>::quiet_NaN());
+    out << ","
+        << params.glm.glm_subcycles << ",";
+    write_optional_double(out, actual_ch);
+    out << ",";
+    write_optional_double(out, actual_cp);
+    out << ",";
+    write_optional_double(out, effective_cd);
+    out << ",";
+    write_optional_double(out, effective_cr);
     out << ","
         << powell_limited_total_cells << ","
         << powell_limited_max_cells_per_step << ","
@@ -2279,6 +2383,7 @@ void run_mhd_2d_case(
     const auto init_start = Clock::now();
 
     params.diagnostic_stride = std::max(1, params.diagnostic_stride);
+    validate_glm_tuning_params(params.glm);
 
     // Derive grid spacing from domain size and resolution.
     params.glm.dx = params.glm.xlen / static_cast<double>(params.glm.nx);
@@ -2314,15 +2419,12 @@ void run_mhd_2d_case(
         );
     }
 
-    // Freeze ch at the initial max signal speed (Dedner 2002 convention).
+    // Freeze ch at the initial max signal speed (Dedner 2002 convention),
+    // with optional paper-consistent scaling.
     const double ch_init = max_signal_speed_2d(U, gamma, 0.0, false);
-    params.glm.ch = ch_init;
+    params.glm.ch = params.glm.glm_ch_factor * ch_init;
 
-    const bool glm_active =
-        (type == CleaningType::HYPERBOLIC_GLM
-      || type == CleaningType::MIXED_GLM
-      || type == CleaningType::MIXED_EGLM
-      || type == CleaningType::GI_MIXED_EGLM);
+    const bool glm_active = is_glm_cleaning(type);
 
     const std::string name   = cleaning_name(type);
     const std::string prefix = params.glm.out_prefix;
@@ -2415,6 +2517,12 @@ void run_mhd_2d_case(
     double powell_limited_theta_min_global = 1.0;
     double powell_limited_theta_sum = 0.0;
     long long powell_limited_total_activations = 0;
+    double run_actual_ch = glm_active
+        ? params.glm.ch
+        : std::numeric_limits<double>::quiet_NaN();
+    double run_actual_cp = std::numeric_limits<double>::quiet_NaN();
+    double run_effective_cd = std::numeric_limits<double>::quiet_NaN();
+    double run_effective_cr = std::numeric_limits<double>::quiet_NaN();
     bool wrote_first_limited_cell = false;
 
     while (true) {
@@ -2789,6 +2897,18 @@ void run_mhd_2d_case(
         last_projection_true_residual =
             cleaning_stats.projection_true_residual;
         last_projection_converged = cleaning_stats.projection_converged;
+        if (std::isfinite(cleaning_stats.actual_ch)) {
+            run_actual_ch = cleaning_stats.actual_ch;
+        }
+        if (std::isfinite(cleaning_stats.actual_cp)) {
+            run_actual_cp = cleaning_stats.actual_cp;
+        }
+        if (std::isfinite(cleaning_stats.effective_cd)) {
+            run_effective_cd = cleaning_stats.effective_cd;
+        }
+        if (std::isfinite(cleaning_stats.effective_cr)) {
+            run_effective_cr = cleaning_stats.effective_cr;
+        }
 
         t += dt;
         ++step;
@@ -2943,6 +3063,10 @@ void run_mhd_2d_case(
             run_projection_theta,
             run_total_retries,
             run_min_dt_used,
+            run_actual_ch,
+            run_actual_cp,
+            run_effective_cd,
+            run_effective_cr,
             powell_limited_total_cells,
             powell_limited_max_cells_per_step,
             powell_limited_theta_min_global,

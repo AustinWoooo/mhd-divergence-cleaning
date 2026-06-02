@@ -234,9 +234,9 @@ int main(int argc, char* argv[]) {
     int nx_override = -1;
     int ny_override = -1;
     int diagnostic_stride = 1;
-    double glm_ch_factor = 1.0;
+    double glm_ch_factor = 4.0;
     double glm_cd = std::numeric_limits<double>::quiet_NaN();
-    double glm_cr = std::numeric_limits<double>::quiet_NaN();
+    double glm_cr = 0.1;
     int glm_subcycles = 1;
     double t_end_override = 0.0;
     bool has_t_end_override = false;

@@ -778,7 +778,7 @@ def main() -> int:
     parser.add_argument("--limiter", default="mc", choices=["minmod", "vanleer", "mc"])
     parser.add_argument("--tfinal", type=float, default=0.05)
     parser.add_argument("--diagnostic-stride", type=int, default=100)
-    parser.add_argument("--glm-ch-factor", type=float, default=1.0)
+    parser.add_argument("--glm-ch-factor", type=float, default=4.0)
     parser.add_argument("--glm-cd", type=float, default=None)
     parser.add_argument("--glm-cr", type=float, default=None)
     parser.add_argument("--glm-subcycles", type=int, default=1)
@@ -815,6 +815,11 @@ def main() -> int:
         raise SystemExit("set only one of --glm-cd or --glm-cr")
     if args.glm_subcycles < 1:
         raise SystemExit("--glm-subcycles must be >= 1")
+    effective_glm_cr = (
+        args.glm_cr
+        if args.glm_cr is not None or args.glm_cd is not None
+        else 0.1
+    )
     if any(n <= 0 for n in args.resolutions):
         raise SystemExit("--resolutions must be positive")
     if len(set(args.resolutions)) < 3:
@@ -862,8 +867,8 @@ def main() -> int:
             ]
             if args.glm_cd is not None:
                 cmd[1:1] = ["--glm-cd", str(args.glm_cd)]
-            if args.glm_cr is not None:
-                cmd[1:1] = ["--glm-cr", str(args.glm_cr)]
+            if effective_glm_cr is not None:
+                cmd[1:1] = ["--glm-cr", str(effective_glm_cr)]
             result = run(cmd, dry_run=args.dry_run, check=not args.continue_on_failure)
             if result is not None and result.returncode != 0:
                 message = f"{args.problem} {method} {n}^2 exited with code {result.returncode}"

@@ -46,9 +46,9 @@ struct GLM2DParams {
     //
     // If neither is set, the existing cp default is used unchanged.
     // Pure hyperbolic GLM ignores damping controls.
-    double glm_ch_factor = 1.0;
+    double glm_ch_factor = 4.0;
     double glm_cd = std::numeric_limits<double>::quiet_NaN();
-    double glm_cr = std::numeric_limits<double>::quiet_NaN();
+    double glm_cr = 0.1;
     int glm_subcycles = 1;
 
     CleaningEnergyPolicy energy_policy =

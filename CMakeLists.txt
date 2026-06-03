@@ -68,7 +68,6 @@ add_library(glm2d
     src/mixed_glm2d.cpp
     src/parabolic2d.cpp
     src/powell2d.cpp
-    src/powell_control.cpp
     src/projection2d.cpp
     src/eglm2d.cpp
     src/galilean_glm2d.cpp

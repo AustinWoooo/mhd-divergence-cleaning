@@ -42,8 +42,6 @@ METHOD_ORDER = [
     "gi_mixed_eglm",
     "elliptic_projection",
     "powell_source",
-    "powell_source_limited",
-    "powell_source_subcycled",
 ]
 
 METHOD_LABELS = {
@@ -55,8 +53,6 @@ METHOD_LABELS = {
     "gi_mixed_eglm": "GI mixed EGLM",
     "elliptic_projection": "elliptic projection",
     "powell_source": "Powell",
-    "powell_source_limited": "Powell limited",
-    "powell_source_subcycled": "Powell subcycled",
 }
 
 METHOD_MARKERS = {
@@ -68,8 +64,6 @@ METHOD_MARKERS = {
     "gi_mixed_eglm": "D",
     "elliptic_projection": "P",
     "powell_source": "X",
-    "powell_source_limited": "*",
-    "powell_source_subcycled": "h",
 }
 
 TIMING_COLORS = {

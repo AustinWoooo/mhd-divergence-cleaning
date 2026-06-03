@@ -40,8 +40,6 @@ METHODS = [
     "parabolic",
     "elliptic_projection",
     "powell_source",
-    "powell_source_subcycled",
-    "powell_source_limited",
     "mixed_eglm",
     "gi_mixed_eglm",
 ]
@@ -53,8 +51,6 @@ LABELS = {
     "parabolic": "Parabolic",
     "elliptic_projection": "Projection",
     "powell_source": "Powell",
-    "powell_source_subcycled": "Powell subcycled",
-    "powell_source_limited": "Powell limited",
     "mixed_eglm": "Mixed EGLM",
     "gi_mixed_eglm": "GI Mixed EGLM",
 }
@@ -66,8 +62,6 @@ COLORS = {
     "parabolic": "#d62728",
     "elliptic_projection": "#9467bd",
     "powell_source": "#8c564b",
-    "powell_source_subcycled": "#7f7f7f",
-    "powell_source_limited": "#17becf",
     "mixed_eglm": "#e377c2",
     "gi_mixed_eglm": "#bcbd22",
 }

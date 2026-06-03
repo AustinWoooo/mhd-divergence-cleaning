@@ -43,8 +43,6 @@ METHOD_ORDER = [
     "parabolic",
     "elliptic_projection",
     "powell_source",
-    "powell_source_limited",
-    "powell_source_subcycled",
 ]
 
 METHOD_LABELS = {
@@ -56,8 +54,6 @@ METHOD_LABELS = {
     "parabolic": "Parabolic",
     "elliptic_projection": "Projection",
     "powell_source": "Powell",
-    "powell_source_limited": "Powell limited",
-    "powell_source_subcycled": "Powell subcycled",
     "eglm": "EGLM",
 }
 
@@ -70,8 +66,6 @@ METHOD_COLORS = {
     "parabolic": "#d62728",
     "elliptic_projection": "#9467bd",
     "powell_source": "#8c564b",
-    "powell_source_limited": "#17becf",
-    "powell_source_subcycled": "#7f7f7f",
 }
 
 FAMILY = {
@@ -83,8 +77,6 @@ FAMILY = {
     "parabolic": "parabolic",
     "elliptic_projection": "elliptic projection",
     "powell_source": "Powell/source family",
-    "powell_source_limited": "Powell/source family",
-    "powell_source_subcycled": "Powell/source family",
     "eglm": "EGLM/source family",
 }
 
@@ -1040,7 +1032,7 @@ def plot_snapshots() -> None:
     focus_groups = {
         "none_mixed_projection": ["none", "mixed_glm", "elliptic_projection"],
         "glm_eglm_family": ["none", "hyperbolic_glm", "mixed_glm", "mixed_eglm", "gi_mixed_eglm"],
-        "source_term_family": ["none", "mixed_eglm", "gi_mixed_eglm", "powell_source", "powell_source_limited", "powell_source_subcycled"],
+        "source_term_family": ["none", "mixed_eglm", "gi_mixed_eglm", "powell_source"],
     }
     for prob, items in sorted(by_problem.items()):
         by_method = {m.method: (p, m, d) for p, m, d in items}

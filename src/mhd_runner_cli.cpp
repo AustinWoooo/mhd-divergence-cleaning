@@ -29,8 +29,6 @@ const std::vector<std::string> METHODS = {
     "parabolic",
     "elliptic_projection",
     "powell_source",
-    "powell_source_subcycled",
-    "powell_source_limited",
     "eglm",
     "mixed_eglm",
     "gi_mixed_eglm"
@@ -43,8 +41,6 @@ const std::vector<CleaningType> ALL_CASES = {
     CleaningType::PARABOLIC,
     CleaningType::ELLIPTIC_PROJECTION,
     CleaningType::POWELL_SOURCE,
-    CleaningType::POWELL_SOURCE_SUBCYCLED,
-    CleaningType::POWELL_SOURCE_LIMITED,
     CleaningType::MIXED_EGLM,
     CleaningType::GI_MIXED_EGLM
 };
@@ -62,8 +58,8 @@ void print_usage(const char* prog) {
         << " [problem] [cleaning...]\n\n"
         << "Problems: orszag_tang | field_loop | divergence_advection | blast_wave\n"
         << "Cleaning methods: none | hyperbolic_glm | mixed_glm | parabolic | "
-        << "elliptic_projection | powell_source | powell_source_subcycled | "
-        << "powell_source_limited | eglm | mixed_eglm | gi_mixed_eglm\n\n"
+        << "elliptic_projection | powell_source | eglm | mixed_eglm | "
+        << "gi_mixed_eglm\n\n"
         << "Benchmark controls:\n"
         << "  --performance-mode      Disable snapshots and use sparse diagnostics unless overridden.\n"
         << "  --no-snapshots          Disable initial/final snapshot CSV output.\n"

@@ -32,8 +32,6 @@ METHODS_MAIN = [
     "parabolic",
     "elliptic_projection",
     "powell_source",
-    "powell_source_subcycled",
-    "powell_source_limited",
 ]
 
 METHODS_READY = [
@@ -49,8 +47,6 @@ METHOD_LABELS = {
     "parabolic": "Parabolic",
     "elliptic_projection": "Projection",
     "powell_source": "Powell",
-    "powell_source_subcycled": "Powell subcycled control",
-    "powell_source_limited": "Pressure-limited Powell",
 }
 
 _METHOD_SHORT = {
@@ -62,12 +58,11 @@ _METHOD_SHORT = {
     "parabolic": "parabolic",
     "elliptic_projection": "projection",
     "powell_source": "Powell",
-    "powell_source_limited": "Powell (lim.)",
 }
 
 _METHOD_ORDER = [
     "none", "hyperbolic_glm", "mixed_glm", "mixed_eglm", "gi_mixed_eglm",
-    "parabolic", "elliptic_projection", "powell_source", "powell_source_limited",
+    "parabolic", "elliptic_projection", "powell_source",
 ]
 
 _POLICY_SHORT = {
@@ -82,8 +77,6 @@ COLORS = {
     "parabolic": "tab:green",
     "elliptic_projection": "tab:red",
     "powell_source": "tab:purple",
-    "powell_source_subcycled": "tab:brown",
-    "powell_source_limited": "tab:cyan",
 }
 
 LINESTYLES = {
@@ -93,8 +86,6 @@ LINESTYLES = {
     "parabolic": "--",
     "elliptic_projection": "--",
     "powell_source": ":",
-    "powell_source_subcycled": "-.",
-    "powell_source_limited": "--",
 }
 
 
@@ -197,8 +188,6 @@ def plot_ot_pressure_failure_stages():
         "parabolic",
         "elliptic_projection",
         "powell_source",
-        "powell_source_subcycled",
-        "powell_source_limited",
     ]
     stage_cols = [
         ("before_hydro", ["min_pressure_before_hydro"]),
@@ -495,16 +484,12 @@ def plot_ot_failure_times_clean():
 def plot_ot_bad_cell_energy_clean():
     """Stacked bar chart of energy decomposition at first bad cell, one bar per method/policy.
 
-    powell_source_limited is excluded: its cell energies are unphysical
-    (E_kin ~ 6500, E_mag ~ 2000) and would suppress all other bars.
     Saves to mhd_runner_ot_bad_cell_energy_clean.png.
     """
     fails = _load_clean_failures()
     if fails.empty:
         print("no failure energy data found")
         return
-
-    fails = fails[fails["method"] != "powell_source_limited"].copy()
 
     method_rank = {m: i for i, m in enumerate(_METHOD_ORDER)}
     fails["_rank"] = fails["method"].map(method_rank).fillna(99)
@@ -540,10 +525,7 @@ def plot_ot_bad_cell_energy_clean():
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=9)
     ax.set_ylabel("cell energy density")
-    ax.set_title(
-        "Orszag–Tang: energy decomposition at first bad cell\n"
-        r"(powell\_source\_limited excluded: $E_{\rm kin}\approx6500$, $E_{\rm mag}\approx2000$ — unphysical)"
-    )
+    ax.set_title("Orszag–Tang: energy decomposition at first bad cell")
     ax.grid(True, axis="y", alpha=0.3)
     ax.legend(fontsize=9, ncol=2, loc="upper right")
     plt.tight_layout()

@@ -29,8 +29,6 @@ const std::vector<std::string> METHODS = {
     "parabolic",
     "elliptic_projection",
     "powell_source",
-    "powell_source_subcycled",
-    "powell_source_limited",
     "eglm",
     "mixed_eglm",
     "gi_mixed_eglm"
@@ -43,8 +41,6 @@ const std::vector<CleaningType> ALL_CASES = {
     CleaningType::PARABOLIC,
     CleaningType::ELLIPTIC_PROJECTION,
     CleaningType::POWELL_SOURCE,
-    CleaningType::POWELL_SOURCE_SUBCYCLED,
-    CleaningType::POWELL_SOURCE_LIMITED,
     CleaningType::MIXED_EGLM,
     CleaningType::GI_MIXED_EGLM
 };
@@ -56,23 +52,26 @@ void print_usage(const char* prog) {
         << " [--diagnostic-stride N] [--output-root PATH]"
         << " [--glm-ch-factor X] [--glm-cd X | --glm-cr X]"
         << " [--glm-subcycles N]"
+        << " [--projection-diagnostics]"
         << " [--preserve-thermal-pressure] [--project-each-stage]"
         << " [--reconstruction pcm|plm] [--limiter minmod|vanleer|mc]"
         << " [--nx N] [--ny N] [--tfinal T] [--output-prefix PREFIX]"
         << " [problem] [cleaning...]\n\n"
         << "Problems: orszag_tang | field_loop | divergence_advection | blast_wave\n"
         << "Cleaning methods: none | hyperbolic_glm | mixed_glm | parabolic | "
-        << "elliptic_projection | powell_source | powell_source_subcycled | "
-        << "powell_source_limited | eglm | mixed_eglm | gi_mixed_eglm\n\n"
+        << "elliptic_projection | powell_source | eglm | mixed_eglm | "
+        << "gi_mixed_eglm\n\n"
         << "Benchmark controls:\n"
         << "  --performance-mode      Disable snapshots and use sparse diagnostics unless overridden.\n"
         << "  --no-snapshots          Disable initial/final snapshot CSV output.\n"
         << "  --diagnostic-stride N   Write time-history diagnostics every N accepted steps.\n"
         << "  --output-root PATH      Root for runner CSV outputs (default: results/mhd_runner).\n"
-        << "  --glm-ch-factor X       Scale ch from the initial max signal speed (default: 1).\n"
+        << "  --glm-ch-factor X       Scale ch from the initial max signal speed (default: 4).\n"
         << "  --glm-cd X              Retained psi fraction per mixed-GLM cleaning substep, 0<X<1.\n"
         << "  --glm-cr X              Dedner-style cr=cp^2/ch for mixed-GLM damping.\n"
         << "  --glm-subcycles N       Minimum GLM cleaning subcycles per MHD step.\n"
+        << "  --projection-diagnostics\n"
+        << "                          For blast_wave + elliptic_projection, write projection correction CSVs.\n"
         << "  --list-problems         Print supported MHD problems.\n"
         << "  --list-methods          Print supported cleaning methods.\n";
 }
@@ -150,6 +149,7 @@ void run_problem(
     double glm_cd,
     double glm_cr,
     int glm_subcycles,
+    bool write_projection_diagnostics,
     const std::string& output_root
 ) {
     MHDRunParams params;
@@ -159,6 +159,7 @@ void run_problem(
     params.limiter = limiter;
     params.output_root = output_root;
     params.performance_mode = performance_mode;
+    params.write_projection_diagnostics = write_projection_diagnostics;
 
     params.glm.nx = smoke ? 32 : (nx_override > 0 ? nx_override : N);
     params.glm.ny = smoke ? 32 : (ny_override > 0 ? ny_override : N);
@@ -227,6 +228,8 @@ int main(int argc, char* argv[]) {
     bool diagnostic_stride_explicit = false;
     bool energy_policy_explicit = false;
     bool project_each_stage = false;
+    bool write_projection_diagnostics = false;
+    bool glm_cr_explicit = false;
     CleaningEnergyPolicy energy_policy =
         CleaningEnergyPolicy::ConserveTotalEnergy;
     MHD::Reconstruction reconstruction = MHD::Reconstruction::PLM;
@@ -273,6 +276,10 @@ int main(int argc, char* argv[]) {
                 no_snapshots = true;
                 continue;
             }
+            if (arg == "--projection-diagnostics") {
+                write_projection_diagnostics = true;
+                continue;
+            }
             if (arg == "--diagnostic-stride") {
                 diagnostic_stride =
                     parse_positive_int(
@@ -295,6 +302,9 @@ int main(int argc, char* argv[]) {
                 if (!(glm_cd > 0.0 && glm_cd < 1.0)) {
                     throw std::invalid_argument("--glm-cd must satisfy 0 < value < 1");
                 }
+                if (!glm_cr_explicit) {
+                    glm_cr = std::numeric_limits<double>::quiet_NaN();
+                }
                 continue;
             }
             if (arg == "--glm-cr") {
@@ -303,6 +313,7 @@ int main(int argc, char* argv[]) {
                         require_value(argc, argv, i, arg).c_str(),
                         arg
                     );
+                glm_cr_explicit = true;
                 continue;
             }
             if (arg == "--glm-subcycles") {
@@ -439,6 +450,7 @@ int main(int argc, char* argv[]) {
             glm_cd,
             glm_cr,
             glm_subcycles,
+            write_projection_diagnostics,
             output_root
         );
     } catch (const std::exception& exc) {

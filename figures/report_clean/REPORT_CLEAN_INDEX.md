@@ -25,6 +25,14 @@
 - figures/report_clean/accuracy_cost_pareto.pdf
 - figures/report_clean/robustness_problem_method.png
 - figures/report_clean/robustness_problem_method.pdf
+- figures/report_clean/snapshot_compare_divergence_advection.png
+- figures/report_clean/snapshot_compare_divergence_advection.pdf
+- figures/report_clean/snapshot_compare_field_loop.png
+- figures/report_clean/snapshot_compare_field_loop.pdf
+- figures/report_clean/snapshot_compare_orszag_tang.png
+- figures/report_clean/snapshot_compare_orszag_tang.pdf
+- figures/report_clean/snapshot_compare_blast_wave.png
+- figures/report_clean/snapshot_compare_blast_wave.pdf
 - figures/report_clean/ot_snapshot_density_pressure_divb.png
 - figures/report_clean/ot_snapshot_density_pressure_divb.pdf
 - figures/report_clean/projection_diagnostics.png

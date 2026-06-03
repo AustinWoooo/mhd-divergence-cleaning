@@ -5,7 +5,6 @@
 #include "hyperbolic_glm2d.hpp"
 #include "mixed_glm2d.hpp"
 #include "parabolic2d.hpp"
-#include "powell_control.hpp"
 #include "powell2d.hpp"
 #include "projection2d.hpp"
 #include "eglm2d.hpp"
@@ -125,8 +124,6 @@ CleaningType parse_cleaning_type_2d(const std::string& name) {
     if (name == "mixed_glm") return CleaningType::MIXED_GLM;
     if (name == "elliptic_projection") return CleaningType::ELLIPTIC_PROJECTION;
     if (name == "powell_source") return CleaningType::POWELL_SOURCE;
-    if (name == "powell_source_subcycled") return CleaningType::POWELL_SOURCE_SUBCYCLED;
-    if (name == "powell_source_limited") return CleaningType::POWELL_SOURCE_LIMITED;
     if (name == "eglm") return CleaningType::MIXED_EGLM;
     if (name == "mixed_eglm") return CleaningType::MIXED_EGLM;
     if (name == "gi_mixed_eglm") return CleaningType::GI_MIXED_EGLM;
@@ -145,7 +142,6 @@ std::vector<CleaningType> selected_cleaning_cases_2d(
             CleaningType::PARABOLIC,
             CleaningType::ELLIPTIC_PROJECTION,
             CleaningType::POWELL_SOURCE,
-            CleaningType::POWELL_SOURCE_LIMITED,
             CleaningType::MIXED_EGLM,
             CleaningType::GI_MIXED_EGLM
         };
@@ -264,17 +260,6 @@ void advance_glm_2d_one_step(
     }
 
     if (type == CleaningType::POWELL_SOURCE) {
-        apply_powell_source_2d(U, params);
-        return;
-    }
-
-    if (type == CleaningType::POWELL_SOURCE_SUBCYCLED) {
-        constexpr double C_source = 0.02;
-        apply_powell_subcycled_2d(U, params, params.dt, 0.0, C_source);
-        return;
-    }
-
-    if (type == CleaningType::POWELL_SOURCE_LIMITED) {
         apply_powell_source_2d(U, params);
         return;
     }

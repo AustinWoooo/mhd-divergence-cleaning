@@ -137,23 +137,7 @@ METHODS = {
         "ls": "--",
         "primary": False,
     },
-    "powell_source_subcycled": {
-        "label": "Powell subcycled control",
-        "color": "#7f7f7f",
-        "ls": "-.",
-        "primary": False,
-    },
-    "powell_source_limited": {
-        "label": "Pressure-limited Powell",
-        "color": "#17becf",
-        "ls": "--",
-        "primary": False,
-    },
 }
-
-# Set to True if you want the cautionary Powell robustness-control variants
-# included in report figures. The summary CSV always includes every method below.
-INCLUDE_CAUTIONARY_METHODS = False
 
 CLEANING_TYPES = [
     "none",
@@ -162,8 +146,6 @@ CLEANING_TYPES = [
     "parabolic",
     "elliptic_projection",
     "powell_source",
-    "powell_source_subcycled",
-    "powell_source_limited",
     "mixed_eglm",
     "gi_mixed_eglm",
 ]
@@ -191,7 +173,7 @@ FIG_DATA_DIR     = FIGURES_DIR / "data"
 #  Helpers
 # ---------------------------------------------------------------------------
 
-def selected_methods(include_cautionary: bool = INCLUDE_CAUTIONARY_METHODS) -> list[str]:
+def selected_methods(include_cautionary: bool = False) -> list[str]:
     if include_cautionary:
         return list(METHODS.keys())
     return [name for name, spec in METHODS.items() if spec["primary"]]

@@ -10,9 +10,6 @@ it writes, per method:
                                             sub-stage of the step.
   * <prefix>_first_bad_cell_diagnostic.csv  -- before/after state of the cell
                                             that first went bad.
-  * <prefix>_limiter_stats.csv           -- (pressure-limited Powell only) a
-                                            per-step time series of the limiter.
-
 This script turns those records into three figures:
 
   figures/mhd_runner/failures/failure_stage_pressure.png
@@ -21,10 +18,6 @@ This script turns those records into three figures:
       update for the low-beta blast).
   figures/mhd_runner/failures/failure_time.png
       When (sim time / step) each method died, annotated with the reason.
-  figures/mhd_runner/failures/limiter_timeseries.png
-      Pressure-limited Powell: how the limiter pins the pressure near the floor
-      while max|divB| grows until the run blows up.
-
 Run from the repository root:
 
     python scripts/plot/plot_failure_diagnostics.py
@@ -69,8 +62,6 @@ METHOD_LABELS = {
     "parabolic": "Parabolic",
     "elliptic_projection": "Projection",
     "powell_source": "Powell",
-    "powell_source_subcycled": "Powell subcycled",
-    "powell_source_limited": "Pressure-limited Powell",
 }
 
 COLORS = {
@@ -79,14 +70,12 @@ COLORS = {
     "mixed_eglm": "tab:pink",
     "gi_mixed_eglm": "tab:olive",
     "powell_source": "tab:purple",
-    "powell_source_subcycled": "tab:brown",
-    "powell_source_limited": "tab:cyan",
 }
 
 # Plot methods in a stable, readable order regardless of glob order on disk.
 METHOD_ORDER = [
     "hyperbolic_glm", "mixed_glm", "mixed_eglm", "gi_mixed_eglm",
-    "powell_source", "powell_source_subcycled", "powell_source_limited",
+    "powell_source",
 ]
 
 

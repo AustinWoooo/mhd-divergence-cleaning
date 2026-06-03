@@ -34,7 +34,6 @@ METHOD_ORDER = [
     "parabolic",
     "elliptic_projection",
     "powell_source",
-    "powell_source_limited",
     "mixed_eglm",
     "gi_mixed_eglm",
 ]
@@ -54,8 +53,6 @@ PRESSURE_METHODS = [
     "parabolic",
     "elliptic_projection",
     "powell_source",
-    "powell_source_subcycled",
-    "powell_source_limited",
 ]
 
 GLM_FAMILY_METHODS = [
@@ -75,8 +72,6 @@ PERFORMANCE_METHODS = [
     "parabolic",
     "elliptic_projection",
     "powell_source",
-    "powell_source_limited",
-    "powell_source_subcycled",
 ]
 
 SCORECARD_METHODS = [
@@ -89,6 +84,57 @@ SCORECARD_METHODS = [
     "gi_mixed_eglm",
 ]
 
+SNAPSHOT_COMPARE_METHODS = [
+    "none",
+    "hyperbolic_glm",
+    "mixed_glm",
+    "parabolic",
+    "elliptic_projection",
+    "mixed_eglm",
+    "gi_mixed_eglm",
+    "powell_source",
+]
+
+SNAPSHOT_COMPARE_METHODS_BY_PROBLEM = {
+    "orszag_tang": [
+        "none",
+        "hyperbolic_glm",
+        "mixed_glm",
+        "parabolic",
+        "elliptic_projection",
+        "mixed_eglm",
+        "gi_mixed_eglm",
+        "powell_source",
+    ],
+    "divergence_advection": [
+        "none",
+        "hyperbolic_glm",
+        "mixed_glm",
+        "parabolic",
+        "elliptic_projection",
+        "mixed_eglm",
+        "gi_mixed_eglm",
+    ],
+    "field_loop": [
+        "none",
+        "hyperbolic_glm",
+        "mixed_glm",
+        "parabolic",
+        "elliptic_projection",
+        "mixed_eglm",
+        "gi_mixed_eglm",
+    ],
+    "blast_wave": [
+        "none",
+        "hyperbolic_glm",
+        "mixed_glm",
+        "parabolic",
+        "elliptic_projection",
+        "mixed_eglm",
+        "gi_mixed_eglm",
+    ],
+}
+
 LABELS = {
     "none": "No cleaning",
     "hyperbolic_glm": "Hyperbolic GLM",
@@ -96,8 +142,6 @@ LABELS = {
     "parabolic": "Parabolic",
     "elliptic_projection": "Projection",
     "powell_source": "Powell",
-    "powell_source_limited": "Limited Powell",
-    "powell_source_subcycled": "Subcycled Powell",
     "mixed_eglm": "Mixed EGLM",
     "gi_mixed_eglm": "GI-Mixed EGLM",
 }
@@ -109,8 +153,6 @@ COLORS = {
     "parabolic": "#d62728",
     "elliptic_projection": "#9467bd",
     "powell_source": "#8c564b",
-    "powell_source_limited": "#17becf",
-    "powell_source_subcycled": "#7f7f7f",
     "mixed_eglm": "#e377c2",
     "gi_mixed_eglm": "#bcbd22",
 }
@@ -122,8 +164,6 @@ LINESTYLES = {
     "parabolic": ":",
     "elliptic_projection": "-",
     "powell_source": "--",
-    "powell_source_limited": "--",
-    "powell_source_subcycled": "-.",
     "mixed_eglm": "-.",
     "gi_mixed_eglm": ":",
 }
@@ -132,12 +172,14 @@ PROBLEM_PREFIX = {
     "orszag_tang": "mhd_ot",
     "field_loop": "mhd_fl",
     "divergence_advection": "mhd_da",
+    "blast_wave": "mhd_blast",
 }
 
 PROBLEM_LABEL = {
     "orszag_tang": "Orszag-Tang",
     "field_loop": "Field-loop advection",
     "divergence_advection": "Divergence advection",
+    "blast_wave": "Blast wave",
 }
 
 PROBLEM_SCORECARD_LABEL = {
@@ -786,37 +828,85 @@ def add_snapshot_derived(df: pd.DataFrame) -> pd.DataFrame:
     if "divB_fv" in out.columns:
         out["abs_divB_fv"] = np.abs(pd.to_numeric(out["divB_fv"], errors="coerce"))
         if "Bmag" in out.columns:
+            bmag = pd.to_numeric(out["Bmag"], errors="coerce").abs()
+        elif {"Bx", "By", "Bz"}.issubset(out.columns):
+            bx = pd.to_numeric(out["Bx"], errors="coerce")
+            by = pd.to_numeric(out["By"], errors="coerce")
+            bz = pd.to_numeric(out["Bz"], errors="coerce")
+            bmag = np.sqrt(bx * bx + by * by + bz * bz)
+        elif {"Bx", "By"}.issubset(out.columns):
+            bx = pd.to_numeric(out["Bx"], errors="coerce")
+            by = pd.to_numeric(out["By"], errors="coerce")
+            bmag = np.sqrt(bx * bx + by * by)
+        else:
+            bmag = None
+        if bmag is not None:
             xs = np.sort(out["x"].unique())
             ys = np.sort(out["y"].unique())
             dx = float(np.median(np.diff(xs))) if len(xs) > 1 else 1.0
             dy = float(np.median(np.diff(ys))) if len(ys) > 1 else 1.0
             h = math.sqrt(dx * dy)
-            out["norm_abs_divB_fv"] = h * out["abs_divB_fv"] / (out["Bmag"].abs() + 1.0e-30)
+            out["norm_abs_divB_fv"] = h * out["abs_divB_fv"] / (np.asarray(bmag) + 1.0e-30)
     return out
 
 
-def plot_ot_snapshot_panel() -> None:
-    entries = [
-        ("mhd_ot_none", "none"),
-        ("mhd_ot_mixed_glm", "mixed_glm"),
-        ("mhd_ot_elliptic_projection", "elliptic_projection"),
-    ]
-    loaded = []
-    for stem, method in entries:
-        df = load_snapshot(stem)
+def annotate_missing_panel(
+    ax: plt.Axes,
+    text: str = "N/A",
+    xlim: tuple[float, float] = (0.0, 1.0),
+    ylim: tuple[float, float] = (0.0, 1.0),
+) -> None:
+    ax.set_facecolor("#f1f1f1")
+    ax.text(
+        0.5,
+        0.5,
+        text,
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        fontsize=13,
+        fontweight="bold",
+        color="#555555",
+    )
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+    ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_color("#cfcfcf")
+
+
+def plot_snapshot_comparison(
+    problem: str,
+    methods: list[str] | None = None,
+    output_stem: str | None = None,
+) -> None:
+    prefix = PROBLEM_PREFIX[problem]
+    methods = methods or SNAPSHOT_COMPARE_METHODS_BY_PROBLEM.get(problem, SNAPSHOT_COMPARE_METHODS)
+    output_stem = output_stem or f"snapshot_compare_{problem}"
+    loaded: list[tuple[str, pd.DataFrame | None]] = []
+    missing: list[str] = []
+    for method in methods:
+        df = load_snapshot(f"{prefix}_{method}")
         if df is None:
-            return
-        loaded.append((method, add_snapshot_derived(df)))
+            loaded.append((method, None))
+            missing.append(method)
+        else:
+            loaded.append((method, add_snapshot_derived(df)))
     rows = [
         ("rho", r"density $\rho$", "viridis", "linear"),
         ("p", r"pressure $p$", "plasma", "linear"),
         ("norm_abs_divB_fv", r"normalized $|\nabla\cdot B|$", "magma", "log"),
     ]
-    fig = plt.figure(figsize=(11.2, 9.2), constrained_layout=True)
+    ncols = len(methods)
+    fig_width = 2.6 * ncols + 1.4
+    fig_height = 2.55 * len(rows) + 1.1
+    fig = plt.figure(figsize=(fig_width, fig_height), constrained_layout=True)
     gs = fig.add_gridspec(
         len(rows),
         len(loaded) + 1,
-        width_ratios=[1.0, 1.0, 1.0, 0.055],
+        width_ratios=[*[1.0 for _ in loaded], 0.06],
         wspace=0.06,
         hspace=0.08,
     )
@@ -828,36 +918,100 @@ def plot_ot_snapshot_panel() -> None:
         caxes.append(fig.add_subplot(gs[r, len(loaded)]))
     for r, (field, label, cmap, scale) in enumerate(rows):
         grids = []
-        for _, df in loaded:
+        valid_positions = []
+        for c, (_, df) in enumerate(loaded):
+            if df is None:
+                continue
             grid = snapshot_grid(df, field)
             if grid is None:
-                SKIPPED.append(f"ot snapshot: missing field {field}")
-                plt.close(fig)
-                return
+                continue
             grids.append(grid)
-        values = np.concatenate([z[np.isfinite(z)].ravel() for _, _, z in grids])
+            valid_positions.append(c)
+        values = np.concatenate([z[np.isfinite(z)].ravel() for _, _, z in grids]) if grids else np.array([])
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            for c, (method, _) in enumerate(loaded):
+                annotate_missing_panel(axes[r, c], "N/A")
+                if r == 0:
+                    axes[r, c].set_title(LABELS[method], fontsize=17)
+                if c == 0:
+                    axes[r, c].set_ylabel(label + "\n$y$", fontsize=16)
+                if r == len(rows) - 1:
+                    axes[r, c].set_xlabel("$x$", fontsize=15)
+            caxes[r].axis("off")
+            SKIPPED.append(f"{output_stem}: no finite values for {field}")
+            continue
         if scale == "log":
             positive = values[values > 0]
-            norm = mcolors.LogNorm(vmin=max(float(positive.min()), 1.0e-14), vmax=float(positive.max()))
+            if positive.size == 0:
+                norm = mcolors.LogNorm(vmin=1.0e-14, vmax=1.0)
+            else:
+                vmin = max(float(positive.min()), 1.0e-14)
+                vmax = max(float(positive.max()), vmin * 10.0)
+                norm = mcolors.LogNorm(vmin=vmin, vmax=vmax)
         else:
             norm = mcolors.Normalize(vmin=float(values.min()), vmax=float(values.max()))
         last_im = None
-        for c, ((method, _), (x, y, z)) in enumerate(zip(loaded, grids)):
+        grid_by_position = dict(zip(valid_positions, grids))
+        xlim = (
+            min(float(np.nanmin(x)) for x, _, _ in grids),
+            max(float(np.nanmax(x)) for x, _, _ in grids),
+        )
+        ylim = (
+            min(float(np.nanmin(y)) for _, y, _ in grids),
+            max(float(np.nanmax(y)) for _, y, _ in grids),
+        )
+        for c, (method, _) in enumerate(loaded):
             ax = axes[r, c]
+            if c not in grid_by_position:
+                annotate_missing_panel(ax, "N/A", xlim=xlim, ylim=ylim)
+                if r == 0:
+                    ax.set_title(LABELS[method], fontsize=17)
+                if c == 0:
+                    ax.set_ylabel(label + "\n$y$", fontsize=16)
+                if r == len(rows) - 1:
+                    ax.set_xlabel("$x$", fontsize=15)
+                continue
+            x, y, z = grid_by_position[c]
+            if scale == "log":
+                z = np.where(z > 0.0, z, norm.vmin)
             last_im = ax.pcolormesh(x, y, z, shading="auto", cmap=cmap, norm=norm)
             ax.set_aspect("equal")
             if r == 0:
-                ax.set_title(LABELS[method])
+                ax.set_title(LABELS[method], fontsize=17)
             if c == 0:
-                ax.set_ylabel(label + "\n$y$")
+                ax.set_ylabel(label + "\n$y$", fontsize=16)
             else:
                 ax.set_yticklabels([])
             if r == len(rows) - 1:
-                ax.set_xlabel("$x$")
+                ax.set_xlabel("$x$", fontsize=15)
             else:
                 ax.set_xticklabels([])
-        fig.colorbar(last_im, cax=caxes[r], label=label)
-    save(fig, "ot_snapshot_density_pressure_divb")
+            ax.tick_params(labelsize=12)
+        if last_im is not None:
+            cbar = fig.colorbar(last_im, cax=caxes[r], label=label)
+            cbar.ax.tick_params(labelsize=12)
+            cbar.set_label(label, fontsize=15)
+        else:
+            caxes[r].axis("off")
+    fig.suptitle(f"{PROBLEM_LABEL[problem]} final snapshots", fontsize=20)
+    if missing:
+        labels = ", ".join(LABELS[m] for m in missing)
+        SKIPPED.append(f"{output_stem}: missing snapshots for {labels}")
+    save(fig, output_stem)
+
+
+def plot_snapshot_comparisons() -> None:
+    for problem in ["divergence_advection", "field_loop", "orszag_tang", "blast_wave"]:
+        plot_snapshot_comparison(problem)
+
+
+def plot_ot_snapshot_panel() -> None:
+    plot_snapshot_comparison(
+        "orszag_tang",
+        methods=["none", "mixed_glm", "elliptic_projection"],
+        output_stem="ot_snapshot_density_pressure_divb",
+    )
 
 
 def plot_projection_diagnostics() -> None:
@@ -944,6 +1098,7 @@ def main() -> None:
     plot_divergence_energy_tradeoff()
     plot_accuracy_cost_pareto()
     plot_robustness_heatmap()
+    plot_snapshot_comparisons()
     plot_ot_snapshot_panel()
     plot_projection_diagnostics()
     plot_convergence_scaling()

@@ -53,6 +53,10 @@ struct MHDRunParams {
     // change physics based on this flag; callers use it to select sparse
     // diagnostics and disabled snapshots.
     bool performance_mode = false;
+
+    // Optional diagnostic for blast_wave + elliptic_projection.  Records the
+    // magnetic correction from the projection step without changing the solver.
+    bool write_projection_diagnostics = false;
 };
 
 void initialize_orszag_tang_2d(

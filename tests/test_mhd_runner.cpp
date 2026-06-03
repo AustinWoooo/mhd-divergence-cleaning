@@ -18,7 +18,7 @@
 //
 //  Cleaning type names (lowercase):
 //    none, parabolic, hyperbolic_glm, mixed_glm, elliptic_projection,
-//    powell_source, powell_source_subcycled, powell_source_limited,
+//    powell_source,
 //    eglm (alias for mixed_eglm), mixed_eglm, gi_mixed_eglm
 // =============================================================================
 
@@ -43,8 +43,6 @@ const std::vector<CleaningType> ALL_CASES = {
     CleaningType::PARABOLIC,
     CleaningType::ELLIPTIC_PROJECTION,
     CleaningType::POWELL_SOURCE,
-    CleaningType::POWELL_SOURCE_SUBCYCLED,
-    CleaningType::POWELL_SOURCE_LIMITED,
     CleaningType::MIXED_EGLM,
     CleaningType::GI_MIXED_EGLM
 };
@@ -98,7 +96,6 @@ void print_usage(const char* prog) {
         << "              (default: orszag_tang)\n"
         << "  cleaning  : none | parabolic | hyperbolic_glm | mixed_glm\n"
         << "              elliptic_projection | powell_source\n"
-        << "              powell_source_subcycled | powell_source_limited\n"
         << "              eglm | mixed_eglm | gi_mixed_eglm  (default: all)\n"
         << "\n"
         << "Examples:\n"
@@ -241,7 +238,6 @@ int main(int argc, char* argv[]) {
             std::cout
                 << "none\nhyperbolic_glm\nmixed_glm\nparabolic\n"
                 << "elliptic_projection\npowell_source\n"
-                << "powell_source_subcycled\npowell_source_limited\n"
                 << "eglm\nmixed_eglm\ngi_mixed_eglm\n";
             return 0;
         }

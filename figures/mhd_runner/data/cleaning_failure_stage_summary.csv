@@ -1,1 +1,2 @@
 problem,method,energy_policy,failure_stage,failure_stage_group,failure_time,i,j,pressure,rho,internal_energy,magnetic_energy,kinetic_energy,divB
+orszag_tang,powell_source,conserve_total_energy,after_cleaning_B_update,after_cleaning,0.0338594,198,199,-0.00921732,0.222578,-0.013826,0.245062,0.419255,-266.215

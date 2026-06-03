@@ -18,8 +18,10 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -136,6 +138,13 @@ struct CleaningAdvanceStats {
     double projection_theta = 1.0;
     // Task A: per-stage minimums recorded during the cleaning substep.
     StagePressureMins stage_mins;
+};
+
+struct ProjectionCorrectionSummary {
+    double total_correction = 0.0;
+    double outside_causal_correction = 0.0;
+    double outside_fraction = 0.0;
+    std::string snapshot_file;
 };
 
 struct MHDRunTiming {
@@ -667,6 +676,215 @@ void write_optional_double(std::ostream& out, double value) {
     }
 }
 
+bool projection_correction_diagnostics_active(
+    const MHDRunParams& params,
+    CleaningType type
+) {
+    return params.write_projection_diagnostics
+        && params.problem == "blast_wave"
+        && type == CleaningType::ELLIPTIC_PROJECTION;
+}
+
+double blast_wave_radius() {
+    return 0.1;
+}
+
+fs::path projection_diagnostics_dir(const MHDRunParams& params) {
+    return fs::path(params.output_root) / "projection_diagnostics";
+}
+
+fs::path projection_diagnostics_summary_path(
+    const MHDRunParams& params,
+    const std::string& method_name
+) {
+    return projection_diagnostics_dir(params)
+        / (params.glm.out_prefix + "_" + method_name
+           + "_projection_causal_summary.csv");
+}
+
+void initialize_projection_diagnostics_summary_csv(
+    const MHDRunParams& params,
+    const std::string& method_name
+) {
+    fs::create_directories(projection_diagnostics_dir(params));
+    const fs::path path =
+        projection_diagnostics_summary_path(params, method_name);
+
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error(
+            "Failed to open projection diagnostics summary: " + path.string()
+        );
+    }
+
+    out << "problem,method,step,substep,time,r0,xc,yc,"
+        << "max_cfast_seen,r_causal,"
+        << "total_projection_correction,"
+        << "outside_causal_projection_correction,"
+        << "outside_fraction,snapshot_file\n";
+}
+
+std::string projection_diagnostics_snapshot_name(
+    const MHDRunParams& params,
+    const std::string& method_name,
+    int step,
+    int substep
+) {
+    std::ostringstream name;
+    name << params.glm.out_prefix
+         << "_" << method_name
+         << "_projection_step"
+         << std::setw(6) << std::setfill('0') << step
+         << "_sub"
+         << std::setw(2) << std::setfill('0') << substep
+         << ".csv";
+    return name.str();
+}
+
+ProjectionCorrectionSummary write_projection_correction_diagnostic(
+    const std::vector<State>& before_projection,
+    const std::vector<State>& after_projection,
+    const MHDRunParams& params,
+    const std::string& method_name,
+    int step,
+    int substep,
+    double time,
+    double max_cfast_seen,
+    bool write_grid
+) {
+    ProjectionCorrectionSummary summary;
+
+    const int nx = params.glm.nx;
+    const int ny = params.glm.ny;
+    const double dx = params.glm.dx;
+    const double dy = params.glm.dy;
+    const double gamma = params.gamma;
+    const double xc = 0.5 * params.glm.xlen;
+    const double yc = 0.5 * params.glm.ylen;
+    const double r0 = blast_wave_radius();
+    const double r_causal = r0 + time * max_cfast_seen;
+
+    fs::path snapshot_path;
+    std::ofstream grid;
+    if (write_grid) {
+        fs::create_directories(projection_diagnostics_dir(params));
+        const std::string snapshot_name =
+            projection_diagnostics_snapshot_name(
+                params,
+                method_name,
+                step,
+                substep
+            );
+        snapshot_path = projection_diagnostics_dir(params) / snapshot_name;
+        grid.open(snapshot_path);
+        if (!grid) {
+            throw std::runtime_error(
+                "Failed to open projection diagnostic snapshot: "
+                + snapshot_path.string()
+            );
+        }
+        summary.snapshot_file = snapshot_name;
+        grid << "i,j,x,y,r,outside_causal,"
+             << "Bx_before_projection,By_before_projection,"
+             << "Bx_after_projection,By_after_projection,"
+             << "dBx_projection,dBy_projection,abs_dB_projection,"
+             << "divB_before_projection,divB_after_projection,"
+             << "pressure_after_cleaning_B\n";
+    }
+
+    for (int j = 0; j < ny; ++j) {
+        const double y = (j + 0.5) * dy;
+        for (int i = 0; i < nx; ++i) {
+            const int id = idx2d(i, j, nx);
+            const double x = (i + 0.5) * dx;
+            const double rx = x - xc;
+            const double ry = y - yc;
+            const double r = std::sqrt(rx * rx + ry * ry);
+
+            const double bx_before = before_projection[id][BX];
+            const double by_before = before_projection[id][BY];
+            const double bx_after = after_projection[id][BX];
+            const double by_after = after_projection[id][BY];
+            const double dbx = bx_after - bx_before;
+            const double dby = by_after - by_before;
+            const double abs_db = std::sqrt(dbx * dbx + dby * dby);
+            const double corr2 = abs_db * abs_db;
+            const bool outside = r > r_causal;
+
+            summary.total_correction += corr2;
+            if (outside) {
+                summary.outside_causal_correction += corr2;
+            }
+
+            if (write_grid) {
+                const double div_before =
+                    compute_fv_divB_cell_2d(
+                        before_projection,
+                        nx,
+                        ny,
+                        i,
+                        j,
+                        dx,
+                        dy
+                    );
+                const double div_after =
+                    compute_fv_divB_cell_2d(
+                        after_projection,
+                        nx,
+                        ny,
+                        i,
+                        j,
+                        dx,
+                        dy
+                    );
+                const PrimState W_after =
+                    state_to_prim(after_projection[id], gamma);
+
+                grid << i << "," << j << ","
+                     << x << "," << y << ","
+                     << r << "," << (outside ? 1 : 0) << ","
+                     << bx_before << "," << by_before << ","
+                     << bx_after << "," << by_after << ","
+                     << dbx << "," << dby << "," << abs_db << ","
+                     << div_before << "," << div_after << ","
+                     << W_after.p << "\n";
+            }
+        }
+    }
+
+    if (summary.total_correction > 0.0) {
+        summary.outside_fraction =
+            summary.outside_causal_correction / summary.total_correction;
+    }
+
+    const fs::path summary_path =
+        projection_diagnostics_summary_path(params, method_name);
+    std::ofstream out(summary_path, std::ios::app);
+    if (!out) {
+        throw std::runtime_error(
+            "Failed to append projection diagnostics summary: "
+            + summary_path.string()
+        );
+    }
+
+    out << params.problem << ","
+        << method_name << ","
+        << step << ","
+        << substep << ","
+        << time << ","
+        << r0 << ","
+        << xc << ","
+        << yc << ","
+        << max_cfast_seen << ","
+        << r_causal << ","
+        << summary.total_correction << ","
+        << summary.outside_causal_correction << ","
+        << summary.outside_fraction << ","
+        << summary.snapshot_file << "\n";
+
+    return summary;
+}
+
 bool is_glm_cleaning(CleaningType type) {
     return type == CleaningType::HYPERBOLIC_GLM
         || type == CleaningType::MIXED_GLM
@@ -854,7 +1072,7 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
     double dt_mhd,
     double gamma,
     bool print_parabolic_subcycling,
-    bool& wrote_first_limited_cell
+    double max_cfast_seen
 ) {
     CleaningAdvanceStats stats;
 
@@ -893,15 +1111,21 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
 
         std::vector<State> Uold;
         std::vector<State> Ubefore_powell;
+        std::vector<State> Ubefore_projection;
         const bool repair_energy =
             params.energy_policy == CleaningEnergyPolicy::PreserveThermalPressure
          && pressure_preserving_policy_applies(type);
+        const bool write_projection_diagnostics =
+            projection_correction_diagnostics_active(run_params, type);
 
         if (repair_energy) {
             Uold = U;
         }
         if (type == CleaningType::POWELL_SOURCE) {
             Ubefore_powell = U;
+        }
+        if (write_projection_diagnostics) {
+            Ubefore_projection = U;
         }
 
         const ProjectionResult projection =
@@ -923,6 +1147,31 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
                           << "  theta=" << projection.projection_theta
                           << "  step=" << step << "\n";
             }
+        }
+
+        if (write_projection_diagnostics) {
+            const double diagnostic_time =
+                time + dt_sub * static_cast<double>(sub + 1);
+            const int diagnostic_step = step + 1;
+            const bool write_grid =
+                should_write_diagnostic_row(
+                    diagnostic_step,
+                    diagnostic_time,
+                    params.t_end,
+                    false,
+                    std::max(1, run_params.diagnostic_stride)
+                );
+            write_projection_correction_diagnostic(
+                Ubefore_projection,
+                U,
+                run_params,
+                method_name,
+                diagnostic_step,
+                sub + 1,
+                diagnostic_time,
+                max_cfast_seen,
+                write_grid
+            );
         }
 
         // Task A: record min physical after B correction (before energy repair).
@@ -2066,6 +2315,9 @@ void run_mhd_2d_case(
     fs::create_directories(fs::path(params.output_root) / "divergence");
     fs::create_directories(fs::path(params.output_root) / "snapshots");
     fs::create_directories(fs::path(params.output_root) / "summaries");
+    if (projection_correction_diagnostics_active(params, type)) {
+        initialize_projection_diagnostics_summary_csv(params, name);
+    }
 
     const auto initial_diag_start = Clock::now();
     const MHDRunDiagnostics initial_diag =
@@ -2145,7 +2397,7 @@ void run_mhd_2d_case(
     double run_actual_cp = std::numeric_limits<double>::quiet_NaN();
     double run_effective_cd = std::numeric_limits<double>::quiet_NaN();
     double run_effective_cr = std::numeric_limits<double>::quiet_NaN();
-    bool wrote_first_limited_cell = false;
+    double max_cfast_seen = ch_init;
 
     while (true) {
         const auto diag_compute_start = Clock::now();
@@ -2250,6 +2502,7 @@ void run_mhd_2d_case(
         if (t >= t_end - 1e-12) break;
 
         const double smax = max_signal_speed_2d(U, gamma, ch_init, glm_active);
+        max_cfast_seen = std::max(max_cfast_seen, smax);
         double dt = cfl * std::min(dx, dy) / smax;
         dt = std::min(dt, t_end - t);
         params.glm.dt = dt;
@@ -2347,7 +2600,7 @@ void run_mhd_2d_case(
                     gamma,
                     type == CleaningType::PARABOLIC &&
                         !printed_parabolic_subcycling,
-                    wrote_first_limited_cell
+                    max_cfast_seen
                 );
             timing.cleaning_time_sec += seconds_since(cleaning_start);
 

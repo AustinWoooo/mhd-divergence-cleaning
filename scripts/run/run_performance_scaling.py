@@ -368,6 +368,63 @@ def method_label(method: str) -> str:
     return METHOD_LABELS.get(method, method)
 
 
+GLM_METHODS = {
+    "hyperbolic_glm",
+    "mixed_glm",
+    "mixed_eglm",
+    "gi_mixed_eglm",
+}
+
+MIXED_GLM_FAMILY = {
+    "mixed_glm",
+    "mixed_eglm",
+    "gi_mixed_eglm",
+}
+
+
+def glm_flags_for_case(problem: str, method: str, args: argparse.Namespace) -> list[str]:
+    """Return report/performance GLM flags for a problem-method pair.
+
+    This helper changes only the benchmark/report parameter policy. It does not
+    alter the GLM equations or solver kernels. Orszag-Tang is shock-dominated
+    and uses OT-tuned GLM parameters from the dedicated parameter sweep; other
+    problems keep the current paper-tuned advection defaults.
+    """
+    canonical = canonical_method(method)
+    if canonical not in GLM_METHODS:
+        return []
+
+    ch_factor = args.glm_ch_factor
+    subcycles = args.glm_subcycles
+    glm_cd = args.glm_cd
+    glm_cr = args.glm_cr
+
+    if problem == "orszag_tang":
+        ch_factor = 16.0
+        subcycles = 2
+        if canonical in MIXED_GLM_FAMILY and glm_cd is None and glm_cr is None:
+            glm_cr = 1.0
+    else:
+        if canonical in MIXED_GLM_FAMILY and glm_cd is None and glm_cr is None:
+            glm_cr = 0.1
+
+    flags: list[str] = []
+
+    if glm_cd is not None:
+        flags += ["--glm-cd", str(glm_cd)]
+    elif canonical in MIXED_GLM_FAMILY and glm_cr is not None:
+        flags += ["--glm-cr", str(glm_cr)]
+
+    flags += [
+        "--glm-ch-factor",
+        str(ch_factor),
+        "--glm-subcycles",
+        str(subcycles),
+    ]
+
+    return flags
+
+
 def figure_path(stem: str, figure_suffix: str = "", resolution: int | None = None) -> Path:
     clean_suffix = figure_suffix.strip("_")
     parts = [stem]
@@ -813,11 +870,6 @@ def main() -> int:
         raise SystemExit("set only one of --glm-cd or --glm-cr")
     if args.glm_subcycles < 1:
         raise SystemExit("--glm-subcycles must be >= 1")
-    effective_glm_cr = (
-        args.glm_cr
-        if args.glm_cr is not None or args.glm_cd is not None
-        else 0.1
-    )
     if any(n <= 0 for n in args.resolutions):
         raise SystemExit("--resolutions must be positive")
     if len(set(args.resolutions)) < 3:
@@ -856,17 +908,10 @@ def main() -> int:
                 args.reconstruction,
                 "--limiter",
                 args.limiter,
-                "--glm-ch-factor",
-                str(args.glm_ch_factor),
-                "--glm-subcycles",
-                str(args.glm_subcycles),
                 args.problem,
                 method,
             ]
-            if args.glm_cd is not None:
-                cmd[1:1] = ["--glm-cd", str(args.glm_cd)]
-            if effective_glm_cr is not None:
-                cmd[1:1] = ["--glm-cr", str(effective_glm_cr)]
+            cmd[1:1] = glm_flags_for_case(args.problem, method, args)
             result = run(cmd, dry_run=args.dry_run, check=not args.continue_on_failure)
             if result is not None and result.returncode != 0:
                 message = f"{args.problem} {method} {n}^2 exited with code {result.returncode}"

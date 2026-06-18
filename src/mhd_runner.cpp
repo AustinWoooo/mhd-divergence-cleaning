@@ -1837,11 +1837,40 @@ void rk2_step_hlld_2d(
 //  Snapshot writer: dumps primitive variables plus divB diagnostics.
 // -----------------------------------------------------------------------------
 
+// Local<->global grid geometry for the initial conditions.  In serial (domain
+// null/inactive) this is just the full nx*ny grid written at idx2d(i,j,nx).
+// Under decomposition it is this rank's interior block: visit n_i x n_j cells
+// whose global indices start at (i0,j0), stored at padded index
+// idx2d(il+ng, jl+ng, stride).
+struct GridView {
+    int n_i, n_j;   // interior cells to visit on this rank
+    int i0, j0;     // global index of the first interior cell
+    int ng;         // ghost offset into the padded array
+    int stride;     // array width for idx2d (nx_pad under MPI, nx in serial)
+};
+
+GridView grid_view(const MHDRunParams& params, const MPIDomain* domain) {
+    if (domain && domain->active) {
+        return {domain->nx_loc, domain->ny_loc, domain->i0, domain->j0,
+                domain->ng, domain->nx_pad()};
+    }
+    return {params.glm.nx, params.glm.ny, 0, 0, 0, params.glm.nx};
+}
+
 void write_mhd_2d_snapshot(
     const std::vector<State>& U,
     const MHDRunParams& params,
-    const std::string& filename
+    const std::string& filename,
+    const MPIDomain* domain = nullptr
 ) {
+    // Gather the decomposed field onto the root rank and write the existing
+    // global CSV layout there, so every downstream plotting/check script is
+    // unaffected.  In serial gather_to_root returns U unchanged.
+    const std::vector<State> Uglob = gather_to_root(U, domain);
+    if (domain && domain->active && domain->rank != 0) {
+        return;
+    }
+
     ensure_parent_directory(filename);
 
     std::ofstream fout(filename);
@@ -1849,8 +1878,8 @@ void write_mhd_2d_snapshot(
         throw std::runtime_error("Failed to open snapshot file: " + filename);
     }
 
-    const int nx = params.glm.nx;
-    const int ny = params.glm.ny;
+    const int nx = (domain && domain->active) ? domain->nx_g : params.glm.nx;
+    const int ny = (domain && domain->active) ? domain->ny_g : params.glm.ny;
     const double dx = params.glm.dx;
     const double dy = params.glm.dy;
     const double gamma = params.gamma;
@@ -1862,10 +1891,10 @@ void write_mhd_2d_snapshot(
             const double x = (i + 0.5) * dx;
             const double y = (j + 0.5) * dy;
 
-            const PrimState W = state_to_prim(U[idx2d(i, j, nx)], gamma);
+            const PrimState W = state_to_prim(Uglob[idx2d(i, j, nx)], gamma);
 
             const double divB =
-                compute_fv_divB_cell_2d(U, nx, ny, i, j, dx, dy);
+                compute_fv_divB_cell_2d(Uglob, nx, ny, i, j, dx, dy);
 
             const double Bmag = std::sqrt(
                 W.Bx * W.Bx + W.By * W.By + W.Bz * W.Bz
@@ -2089,15 +2118,15 @@ void write_mhd_run_summary(
 
 void initialize_orszag_tang_2d(
     std::vector<State>& U,
-    const MHDRunParams& params
+    const MHDRunParams& params,
+    const MPIDomain* domain
 ) {
-    const int nx = params.glm.nx;
-    const int ny = params.glm.ny;
+    const GridView g = grid_view(params, domain);
     const double dx = params.glm.dx;
     const double dy = params.glm.dy;
     const double gamma = params.gamma;
 
-    if (static_cast<int>(U.size()) != nx * ny) {
+    if (static_cast<int>(U.size()) != g.stride * (g.n_j + 2 * g.ng)) {
         throw std::runtime_error("initialize_orszag_tang_2d: U size mismatch.");
     }
 
@@ -2106,10 +2135,10 @@ void initialize_orszag_tang_2d(
     const double rho0 = 25.0 / (36.0 * pi);
     const double p0   = 5.0  / (12.0 * pi);
 
-    for (int j = 0; j < ny; ++j) {
-        const double y = (j + 0.5) * dy;
-        for (int i = 0; i < nx; ++i) {
-            const double x = (i + 0.5) * dx;
+    for (int jl = 0; jl < g.n_j; ++jl) {
+        const double y = (g.j0 + jl + 0.5) * dy;
+        for (int il = 0; il < g.n_i; ++il) {
+            const double x = (g.i0 + il + 0.5) * dx;
 
             const PrimState W(
                 rho0,
@@ -2123,22 +2152,22 @@ void initialize_orszag_tang_2d(
                  0.0
             );
 
-            U[idx2d(i, j, nx)] = prim_to_state(W, gamma);
+            U[idx2d(il + g.ng, jl + g.ng, g.stride)] = prim_to_state(W, gamma);
         }
     }
 }
 
 void initialize_field_loop_2d(
     std::vector<State>& U,
-    const MHDRunParams& params
+    const MHDRunParams& params,
+    const MPIDomain* domain
 ) {
-    const int nx = params.glm.nx;
-    const int ny = params.glm.ny;
+    const GridView g = grid_view(params, domain);
     const double dx = params.glm.dx;
     const double dy = params.glm.dy;
     const double gamma = params.gamma;
 
-    if (static_cast<int>(U.size()) != nx * ny) {
+    if (static_cast<int>(U.size()) != g.stride * (g.n_j + 2 * g.ng)) {
         throw std::runtime_error("initialize_field_loop_2d: U size mismatch.");
     }
 
@@ -2147,10 +2176,10 @@ void initialize_field_loop_2d(
     const double radius = 0.15;
     const double A0 = 1.0e-3;
 
-    for (int j = 0; j < ny; ++j) {
-        const double y = (j + 0.5) * dy;
-        for (int i = 0; i < nx; ++i) {
-            const double x = (i + 0.5) * dx;
+    for (int jl = 0; jl < g.n_j; ++jl) {
+        const double y = (g.j0 + jl + 0.5) * dy;
+        for (int il = 0; il < g.n_i; ++il) {
+            const double x = (g.i0 + il + 0.5) * dx;
             const double rx = x - xc;
             const double ry = y - yc;
             const double r = std::sqrt(rx * rx + ry * ry);
@@ -2174,22 +2203,22 @@ void initialize_field_loop_2d(
                 0.0
             );
 
-            U[idx2d(i, j, nx)] = prim_to_state(W, gamma);
+            U[idx2d(il + g.ng, jl + g.ng, g.stride)] = prim_to_state(W, gamma);
         }
     }
 }
 
 void initialize_divergence_advection_2d(
     std::vector<State>& U,
-    const MHDRunParams& params
+    const MHDRunParams& params,
+    const MPIDomain* domain
 ) {
-    const int nx = params.glm.nx;
-    const int ny = params.glm.ny;
+    const GridView gv = grid_view(params, domain);
     const double dx = params.glm.dx;
     const double dy = params.glm.dy;
     const double gamma = params.gamma;
 
-    if (static_cast<int>(U.size()) != nx * ny) {
+    if (static_cast<int>(U.size()) != gv.stride * (gv.n_j + 2 * gv.ng)) {
         throw std::runtime_error(
             "initialize_divergence_advection_2d: U size mismatch."
         );
@@ -2199,10 +2228,10 @@ void initialize_divergence_advection_2d(
     const double yc = 0.5;
     const double alpha = 100.0;
 
-    for (int j = 0; j < ny; ++j) {
-        const double y = (j + 0.5) * dy;
-        for (int i = 0; i < nx; ++i) {
-            const double x = (i + 0.5) * dx;
+    for (int jl = 0; jl < gv.n_j; ++jl) {
+        const double y = (gv.j0 + jl + 0.5) * dy;
+        for (int il = 0; il < gv.n_i; ++il) {
+            const double x = (gv.i0 + il + 0.5) * dx;
             const double rx = x - xc;
             const double ry = y - yc;
             const double r2 = rx * rx + ry * ry;
@@ -2220,7 +2249,8 @@ void initialize_divergence_advection_2d(
                 0.0
             );
 
-            U[idx2d(i, j, nx)] = prim_to_state(W, gamma);
+            U[idx2d(il + gv.ng, jl + gv.ng, gv.stride)] =
+                prim_to_state(W, gamma);
         }
     }
 }
@@ -2243,15 +2273,15 @@ void initialize_divergence_advection_2d(
 // -----------------------------------------------------------------------------
 void initialize_blast_wave_2d(
     std::vector<State>& U,
-    const MHDRunParams& params
+    const MHDRunParams& params,
+    const MPIDomain* domain
 ) {
-    const int nx = params.glm.nx;
-    const int ny = params.glm.ny;
+    const GridView gv = grid_view(params, domain);
     const double dx = params.glm.dx;
     const double dy = params.glm.dy;
     const double gamma = params.gamma;
 
-    if (static_cast<int>(U.size()) != nx * ny) {
+    if (static_cast<int>(U.size()) != gv.stride * (gv.n_j + 2 * gv.ng)) {
         throw std::runtime_error("initialize_blast_wave_2d: U size mismatch.");
     }
 
@@ -2284,10 +2314,10 @@ void initialize_blast_wave_2d(
 
     const double R2 = R_blast * R_blast;
 
-    for (int j = 0; j < ny; ++j) {
-        const double y = (j + 0.5) * dy;
-        for (int i = 0; i < nx; ++i) {
-            const double x = (i + 0.5) * dx;
+    for (int jl = 0; jl < gv.n_j; ++jl) {
+        const double y = (gv.j0 + jl + 0.5) * dy;
+        for (int il = 0; il < gv.n_i; ++il) {
+            const double x = (gv.i0 + il + 0.5) * dx;
             const double rx = x - xc;
             const double ry = y - yc;
             const double r2 = rx * rx + ry * ry;
@@ -2306,7 +2336,8 @@ void initialize_blast_wave_2d(
                 psi0
             );
 
-            U[idx2d(i, j, nx)] = prim_to_state(W, gamma);
+            U[idx2d(il + gv.ng, jl + gv.ng, gv.stride)] =
+                prim_to_state(W, gamma);
         }
     }
 }

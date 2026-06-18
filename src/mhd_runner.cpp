@@ -1068,13 +1068,33 @@ ProjectionResult apply_elliptic_projection_theta_limited(
     return result;
 }
 
+// elliptic_projection (and project-each-stage) rely on a GLOBAL Poisson solve,
+// which is deliberately NOT domain-decomposed (see docs/parallelism.md).  Refuse
+// such runs on more than one rank with a clear message; np=1 still works because
+// the single rank holds the whole grid.  Every rank calls run_mhd_2d_case with
+// identical arguments, so this throw is collective.  No-op in serial.
+void ensure_projection_supported_under_mpi(
+    bool projection_requested,
+    const MPIDomain* domain
+) {
+    if (projection_requested && domain && domain->active && domain->size > 1) {
+        throw std::invalid_argument(
+            "elliptic_projection is not supported under multi-rank MPI domain "
+            "decomposition: its global Poisson solve is not decomposed. Run it "
+            "with a single rank (mpirun -np 1) or pick a hyperbolic / mixed_glm "
+            "/ parabolic / eglm / powell cleaning method instead.");
+    }
+}
+
 ProjectionResult apply_cleaning_update_for_runner(
     std::vector<State>& U,
     CleaningType type,
     const GLM2DParams& params,
-    double gamma  // needed for theta-limiter (Task E)
+    double gamma,  // needed for theta-limiter (Task E)
+    const MPIDomain* domain = nullptr
 ) {
     if (type == CleaningType::ELLIPTIC_PROJECTION) {
+        ensure_projection_supported_under_mpi(true, domain);
         if (params.energy_policy == CleaningEnergyPolicy::ConserveTotalEnergy) {
             // Task E: use relaxed projection limiter.
             return apply_elliptic_projection_theta_limited(U, params, gamma);
@@ -1164,7 +1184,7 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
         }
 
         const ProjectionResult projection =
-            apply_cleaning_update_for_runner(U, type, params, gamma);
+            apply_cleaning_update_for_runner(U, type, params, gamma, domain);
 
         if (projection.iterations > 0 || type == CleaningType::ELLIPTIC_PROJECTION) {
             stats.projection_used = true;
@@ -1788,6 +1808,9 @@ void rk2_step_hlld_2d(
 
         // For the stage projection, always apply the full theta=1 projection.
         // (The theta limiter is applied at the end-of-step projection only.)
+        // Reaching here means project_each_stage was requested, which needs the
+        // global Poisson solve -- forbidden on more than one rank.
+        ensure_projection_supported_under_mpi(true, domain);
         apply_elliptic_projection_2d(Us, proj_params);
 
         if (repair) {

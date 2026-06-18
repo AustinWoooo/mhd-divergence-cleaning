@@ -1641,7 +1641,8 @@ std::vector<State> positivity_limited_stage(
     Reconstruction recon,
     SlopeLimiter limiter,
     std::vector<double>* mass_flux_x_out = nullptr,
-    std::vector<double>* mass_flux_y_out = nullptr
+    std::vector<double>* mass_flux_y_out = nullptr,
+    const MPIDomain* domain = nullptr
 ) {
     const int ncell = nx * ny;
     constexpr int MAX_SWEEPS = 8;
@@ -1687,8 +1688,17 @@ std::vector<State> positivity_limited_stage(
             }
         }
 
-        if (newly_marked == 0) {
-            break;  // offending cells already fully LLF; nothing more to do
+        // Under domain decomposition a face shared with a neighbour rank must
+        // carry the same LLF flag on both sides, or the two ranks would compute
+        // different fluxes for the same physical interface.  OR-reconcile the
+        // halo masks, then decide the loop termination collectively so all ranks
+        // perform an identical number of sweeps (the mask exchange is collective
+        // and would otherwise deadlock).  Both calls are no-ops in serial.
+        exchange_halo_mask_or(llf_x, domain);
+        exchange_halo_mask_or(llf_y, domain);
+
+        if (global_lor(newly_marked > 0 ? 1 : 0, domain) == 0) {
+            break;  // offending cells already fully LLF on every rank
         }
     }
 
@@ -1710,12 +1720,23 @@ void rk2_step_hlld_2d(
     double gamma, double dt,
     Reconstruction recon,
     SlopeLimiter limiter,
-    const GLM2DParams* stage_glm_params   // non-null enables stage projection
+    const GLM2DParams* stage_glm_params = nullptr,  // non-null enables stage proj
+    const MPIDomain* domain = nullptr
 ) {
     const int ncell = nx * ny;
 
+    // Domain decomposition: every stencil kernel below runs over this rank's
+    // ghost-padded local array and treats it as a periodic grid; the wraparound
+    // only pollutes the outermost ghost results, which are discarded.  Filling
+    // the ng ghost layers from neighbours here makes every interior cell see the
+    // same stencil inputs it would in a single global grid.  No-op in serial.
+    exchange_halos(U, domain);
+
     // Dual-energy (Option C): reconstruct the entropy from the positive
-    // start-of-step state, then advect it alongside the conserved update.
+    // start-of-step state, then advect it alongside the conserved update.  Sc is
+    // a pure function of U, so the freshly exchanged ghosts give it correct
+    // values in both ghost layers (the entropy flux is a 1-cell stencil, so the
+    // interior RHS only depends on the first ghost layer).
     const std::vector<double> Sc = conserved_entropy_field(U, gamma);
 
     // Predictor: Us = U + dt * RHS(U), positivity-limited (Option A). Capture the
@@ -1724,7 +1745,7 @@ void rk2_step_hlld_2d(
     std::vector<State> Us =
         positivity_limited_stage(U, U, /*coeff=*/1.0, dt,
                                  nx, ny, dx, dy, gamma, recon, limiter,
-                                 &mfx, &mfy);
+                                 &mfx, &mfy, domain);
 
     const std::vector<double> S_rhs1 =
         entropy_rhs_from_mass_flux(U, Sc, mfx, mfy, nx, ny, dx, dy);
@@ -1774,10 +1795,12 @@ void rk2_step_hlld_2d(
             base[id][k] = 0.5 * (U[id][k] + Us[id][k]);
         }
     }
+    // Refresh the predictor's halos before it becomes the corrector flux state.
+    exchange_halos(Us, domain);
     std::vector<double> mfx2(ncell, 0.0), mfy2(ncell, 0.0);
     U = positivity_limited_stage(base, Us, /*coeff=*/0.5, dt,
                                  nx, ny, dx, dy, gamma, recon, limiter,
-                                 &mfx2, &mfy2);
+                                 &mfx2, &mfy2, domain);
 
     // Dual-energy corrector: SSP-RK2 combination of the entropy, advected with
     // the corrector mass fluxes, then recover pressure in low-beta cells.
@@ -1790,17 +1813,8 @@ void rk2_step_hlld_2d(
     apply_dual_energy_recovery(U, Sc_new, gamma);
 }
 
-// Overload without stage projection (backward-compatible default).
-void rk2_step_hlld_2d(
-    std::vector<State>& U,
-    int nx, int ny,
-    double dx, double dy,
-    double gamma, double dt,
-    Reconstruction recon,
-    SlopeLimiter limiter
-) {
-    rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt, recon, limiter, nullptr);
-}
+// (The former no-stage overload is now subsumed by the default arguments above:
+//  callers that omit stage_glm_params / domain get nullptr for both.)
 
 // -----------------------------------------------------------------------------
 //  Snapshot writer: dumps primitive variables plus divB diagnostics.

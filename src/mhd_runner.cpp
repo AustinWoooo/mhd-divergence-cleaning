@@ -31,6 +31,7 @@
 #include "glm.hpp"
 #include "glm2d.hpp"
 #include "glm2d_common.hpp"
+#include "mpi_domain.hpp"
 #include "projection2d.hpp"
 
 namespace fs = std::filesystem;
@@ -294,9 +295,14 @@ CellThermo decompose_cell(const State& cell, double gamma) {
 }
 
 // Task A helper: compute min raw pressure and min density from a state vector.
+// Both fields are reduced globally when a decomposition domain is supplied so
+// every rank agrees; min is idempotent, so running over a ghost-padded local
+// array (halo cells repeat their owner's values) is harmless.  domain == nullptr
+// (serial) makes global_min an identity.
 MinPhysical compute_min_physical(
     const std::vector<State>& U,
-    double gamma
+    double gamma,
+    const MPIDomain* domain = nullptr
 ) {
     MinPhysical out;
     for (const State& cell : U) {
@@ -320,6 +326,8 @@ MinPhysical compute_min_physical(
             }
         }
     }
+    out.min_pressure = global_min(out.min_pressure, domain);
+    out.min_density = global_min(out.min_density, domain);
     return out;
 }
 
@@ -614,7 +622,8 @@ void write_powell_first_bad_cell_diagnostic(
 MHDRunDiagnostics compute_mhd_run_diagnostics(
     const std::vector<State>& U,
     double gamma,
-    double cell_area
+    double cell_area,
+    const MPIDomain* domain = nullptr
 ) {
     MHDRunDiagnostics out;
 
@@ -661,6 +670,22 @@ MHDRunDiagnostics compute_mhd_run_diagnostics(
         }
     }
 
+    // Reduce only the evolution-gating quantities (failure flags + minima) so
+    // every rank reaches the same has_mhd_run_failure() verdict each step; these
+    // are idempotent (OR / min) and safe to evaluate over a ghost-padded local
+    // array.  The conservation SUMS (mass/momentum/energy) are deliberately left
+    // rank-local here: under domain decomposition they are recomputed on the root
+    // rank from the gathered global field (see run_mhd_2d_case), because summing
+    // the padded local array would double-count halo cells.  domain == nullptr
+    // (serial) makes every global_* an identity, so this is a no-op.
+    out.has_nonfinite = global_lor(out.has_nonfinite ? 1 : 0, domain) != 0;
+    out.has_negative_density =
+        global_lor(out.has_negative_density ? 1 : 0, domain) != 0;
+    out.has_negative_pressure =
+        global_lor(out.has_negative_pressure ? 1 : 0, domain) != 0;
+    out.min_density = global_min(out.min_density, domain);
+    out.min_raw_pressure = global_min(out.min_raw_pressure, domain);
+    out.min_pressure = global_min(out.min_pressure, domain);
     return out;
 }
 
@@ -1257,7 +1282,8 @@ double max_signal_speed_2d(
     const std::vector<State>& U,
     double gamma,
     double ch,
-    bool include_ch
+    bool include_ch,
+    const MPIDomain* domain = nullptr
 ) {
     double smax = 0.0;
     const std::ptrdiff_t ncell = static_cast<std::ptrdiff_t>(U.size());
@@ -1279,7 +1305,10 @@ double max_signal_speed_2d(
         if (include_ch) s_local = std::max(s_local, ch);
         smax = std::max(smax, s_local);
     }
-    return smax;
+    // CFL must be collective: every rank advances with the same dt.  global_max
+    // is exact and order-independent, and harmless over ghost-padded arrays
+    // (halo cells repeat values already counted on their owning rank).
+    return global_max(smax, domain);
 }
 
 // -----------------------------------------------------------------------------

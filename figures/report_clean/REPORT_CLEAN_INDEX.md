@@ -40,5 +40,31 @@
 - figures/report_clean/convergence_divergence_scaling.png
 - figures/report_clean/convergence_divergence_scaling.pdf
 
+## Methods Included
+- accuracy_cost_pareto: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- divergence_advection_divergence: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- divergence_energy_tradeoff: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection
+- field_loop_divergence: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- method_scorecard: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- method_scorecard_divergence_advection: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- method_scorecard_field_loop: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- method_scorecard_orszag_tang: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- ot_divergence_main: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- ot_energy_drift: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- ot_min_pressure: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- ot_snapshot_density_pressure_divb: none, mixed_glm, elliptic_projection
+- robustness_problem_method: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- snapshot_compare_blast_wave: none, parabolic, elliptic_projection
+- snapshot_compare_divergence_advection: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- snapshot_compare_field_loop: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection, powell_source
+- snapshot_compare_orszag_tang: none, hyperbolic_glm, parabolic, mixed_glm, mixed_eglm, gi_mixed_eglm, elliptic_projection
+
 ## Skipped / Notes
-- none
+- snapshot orszag_tang/powell_source: existing results/mhd_runner/snapshots/mhd_ot_powell_source_final.csv ignored because status=failed final_time_reached=False
+- snapshot_compare_orszag_tang: failed/early snapshots shown as placeholders for Powell at t=0.05702
+- snapshot blast_wave/hyperbolic_glm: existing results/mhd_runner/snapshots/mhd_blast_hyperbolic_glm_final.csv ignored because status=failed final_time_reached=False
+- snapshot blast_wave/mixed_glm: existing results/mhd_runner/snapshots/mhd_blast_mixed_glm_final.csv ignored because status=failed final_time_reached=False
+- snapshot blast_wave/mixed_eglm: existing results/mhd_runner/snapshots/mhd_blast_mixed_eglm_final.csv ignored because status=failed final_time_reached=False
+- snapshot blast_wave/gi_mixed_eglm: existing results/mhd_runner/snapshots/mhd_blast_gi_mixed_eglm_final.csv ignored because status=failed final_time_reached=False
+- snapshot blast_wave/powell_source: existing results/mhd_runner/snapshots/mhd_blast_powell_source_final.csv ignored because status=failed final_time_reached=False
+- snapshot_compare_blast_wave: failed/early snapshots shown as placeholders for Hyperbolic GLM at t=0.006703, Mixed GLM at t=0.006702, Mixed EGLM at t=0.006699, GI-Mixed EGLM at t=0.006698, Powell at t=0.009977

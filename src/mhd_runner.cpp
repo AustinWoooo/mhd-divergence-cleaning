@@ -1097,7 +1097,8 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
     double dt_mhd,
     double gamma,
     bool print_parabolic_subcycling,
-    double max_cfast_seen
+    double max_cfast_seen,
+    const MPIDomain* domain = nullptr
 ) {
     CleaningAdvanceStats stats;
 
@@ -1133,6 +1134,15 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
     for (int sub = 0; sub < nsub; ++sub) {
         params.dt = dt_sub;
         apply_glm_damping_parameterization(type, params, dt_sub, stats);
+
+        // Every cleaning kernel here is a single local-stencil pass (radius <= 2,
+        // within ng); refreshing the ghost layers up front makes every interior
+        // update see correct neighbours.  The pre-update copies below (Uold /
+        // Ubefore_*) then capture those current ghosts too, which the EGLM
+        // sources and the Powell divB diagnostic read via their own stencils.
+        // No-op in serial.  params.nx/ny are the padded local dims under MPI, so
+        // the unchanged kernels index the padded array directly.
+        exchange_halos(U, domain);
 
         std::vector<State> Uold;
         std::vector<State> Ubefore_powell;
@@ -1236,8 +1246,15 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
                 "after_cleaning"
             );
 
-        if (bad.found) {
-            if (type == CleaningType::POWELL_SOURCE &&
+        // Failure detection must be collective: every rank has to leave the
+        // subcycle loop at the same substep, or the halo exchange at the top of
+        // the next iteration would deadlock.  The detailed record stays on the
+        // rank that actually found the bad cell; run-level reporting reconciles
+        // it.  In serial any_bad == bad.found, so this is unchanged.
+        const bool any_bad = global_lor(bad.found ? 1 : 0, domain) != 0;
+        if (any_bad) {
+            if (bad.found &&
+                type == CleaningType::POWELL_SOURCE &&
                 bad.reason == "non_positive_pressure" &&
                 !Ubefore_powell.empty()) {
                 const int id = idx2d(bad.i, bad.j, params.nx);

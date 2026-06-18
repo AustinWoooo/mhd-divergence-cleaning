@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(".")
 FAIL_DIR = ROOT / "results" / "mhd_runner" / "failures"
+DIAG_DIR = ROOT / "results" / "mhd_runner" / "divergence"
 FIG_DIR = ROOT / "figures" / "mhd_runner" / "failures"
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -54,27 +55,36 @@ STAGE_LABELS = [
 ]
 
 METHOD_LABELS = {
-    "none": "None",
+    "none": "None (HLLD only)",
+    "parabolic": "Parabolic",
     "hyperbolic_glm": "Hyperbolic GLM",
     "mixed_glm": "Mixed GLM",
     "mixed_eglm": "Mixed EGLM",
     "gi_mixed_eglm": "GI Mixed EGLM",
-    "parabolic": "Parabolic",
     "elliptic_projection": "Projection",
     "powell_source": "Powell",
 }
 
 COLORS = {
+    "none": "tab:blue",
+    "parabolic": "tab:red",
     "hyperbolic_glm": "tab:orange",
     "mixed_glm": "tab:green",
     "mixed_eglm": "tab:pink",
     "gi_mixed_eglm": "tab:olive",
-    "powell_source": "tab:purple",
+    "elliptic_projection": "tab:purple",
+    "powell_source": "tab:brown",
 }
 
 # Plot methods in a stable, readable order regardless of glob order on disk.
 METHOD_ORDER = [
-    "hyperbolic_glm", "mixed_glm", "mixed_eglm", "gi_mixed_eglm",
+    "none",
+    "parabolic",
+    "hyperbolic_glm",
+    "mixed_glm",
+    "mixed_eglm",
+    "gi_mixed_eglm",
+    "elliptic_projection",
     "powell_source",
 ]
 
@@ -92,10 +102,16 @@ def method_sort_key(method: str) -> int:
 
 
 def load_failures() -> pd.DataFrame:
-    """Concatenate every *_failure.csv (one row per method) into a frame."""
+    """Concatenate blast-wave *_failure.csv rows for supported methods."""
     rows = []
-    for path in sorted(FAIL_DIR.glob("*_failure.csv")):
+    supported = set(METHOD_ORDER)
+    for path in sorted(FAIL_DIR.glob("mhd_blast_*_failure.csv")):
         df = pd.read_csv(path)
+        if not df.empty:
+            df = df[
+                (df["problem"] == "blast_wave")
+                & (df["method"].isin(supported))
+            ].copy()
         if not df.empty:
             df["source_file"] = path.name
             rows.append(df)
@@ -106,25 +122,81 @@ def load_failures() -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
+def stage_rows_for_supported_methods(failures: pd.DataFrame) -> pd.DataFrame:
+    """Return one stage row per supported blast method.
+
+    Methods without a failure record completed the blast-wave diagnostic, so
+    they have no failing sub-stage.  For those rows, use the minimum pressure
+    reached over the run as a positive reference at each stage category.
+    """
+    by_method = {
+        str(row["method"]): row.copy()
+        for _, row in failures.iterrows()
+    }
+    rows = []
+    for method in METHOD_ORDER:
+        if method in by_method:
+            row = by_method[method]
+            row["completed_without_failure"] = False
+            rows.append(row)
+            continue
+
+        diag_path = DIAG_DIR / f"mhd_blast_{method}.csv"
+        if not diag_path.exists():
+            print(f"  warning: no failure or diagnostic CSV for {method}; skipping")
+            continue
+        diag = pd.read_csv(diag_path)
+        if "min_pressure" not in diag.columns:
+            print(f"  warning: {diag_path} has no min_pressure column; skipping")
+            continue
+        min_pressure = pd.to_numeric(diag["min_pressure"], errors="coerce").min()
+        row = pd.Series(
+            {
+                "problem": "blast_wave",
+                "method": method,
+                "stage": "completed",
+                "step": "",
+                "time": pd.to_numeric(diag.get("time"), errors="coerce").max()
+                if "time" in diag.columns
+                else np.nan,
+                "reason": "completed_without_positivity_loss",
+                "source_file": diag_path.name,
+                "completed_without_failure": True,
+                **{column: min_pressure for column in STAGE_COLUMNS},
+            }
+        )
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
 def plot_stage_pressure(failures: pd.DataFrame) -> None:
     """Min pressure after each sub-stage, one line per method (symlog)."""
-    present = [c for c in STAGE_COLUMNS if c in failures.columns]
+    stage_rows = stage_rows_for_supported_methods(failures)
+    present = [c for c in STAGE_COLUMNS if c in stage_rows.columns]
     if not present:
         print("  (no stage min-pressure columns; skipping stage figure)")
         return
 
     x = np.arange(len(present))
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, ax = plt.subplots(figsize=(10.8, 6.0))
 
-    for _, row in failures.iterrows():
+    plotted_methods = []
+    for _, row in stage_rows.iterrows():
         method = row["method"]
         y = pd.to_numeric(row[present], errors="coerce").to_numpy(dtype=float)
+        completed = bool(row.get("completed_without_failure", False))
         ax.plot(
             x, y,
-            marker="o", markersize=6, linewidth=2,
+            marker="s" if completed else "o",
+            markersize=5.5,
+            linewidth=1.8 if completed else 2.2,
+            linestyle="--" if completed else "-",
+            alpha=0.78 if completed else 1.0,
             color=method_color(method),
             label=method_label(method),
         )
+        plotted_methods.append(method)
 
     ax.axhline(0.0, color="black", linewidth=1.0, linestyle="--", alpha=0.7)
     ax.set_yscale("symlog", linthresh=1e-3)
@@ -139,13 +211,24 @@ def plot_stage_pressure(failures: pd.DataFrame) -> None:
 
     # Shade the region below zero (unphysical) to make crossings obvious.
     ax.axhspan(ax.get_ylim()[0], 0.0, color="red", alpha=0.05)
-    ax.legend(loc="lower left", fontsize=9, ncol=2)
+    ax.text(
+        0.99,
+        0.02,
+        "Dashed lines: completed runs; value is min pressure over run",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color="0.35",
+    )
+    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=9)
 
     out = FIG_DIR / "failure_stage_pressure.png"
     plt.tight_layout()
     fig.savefig(out, dpi=220, bbox_inches="tight")
     plt.close(fig)
     print(f"  wrote {out}")
+    print(f"  stage methods: {', '.join(plotted_methods)}")
 
 
 def plot_failure_time(failures: pd.DataFrame) -> None:

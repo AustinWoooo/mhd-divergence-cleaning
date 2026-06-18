@@ -105,6 +105,9 @@ LocalDivBNorms compute_fv_divB_norms_2d(
     double sum_sq_norm = 0.0;
     double max_abs_norm = 0.0;
 
+#pragma omp parallel for schedule(static) \
+    reduction(+ : sum_abs, sum_sq, sum_abs_norm, sum_sq_norm) \
+    reduction(max : max_abs, max_abs_norm)
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             const double divB =
@@ -146,6 +149,7 @@ std::vector<double> compute_fv_divB_field_2d(
 ) {
     std::vector<double> divB(nx * ny, 0.0);
 
+#pragma omp parallel for schedule(static)
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             divB[idx2d(i, j, nx)] =

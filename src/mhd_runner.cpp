@@ -1468,6 +1468,7 @@ std::vector<State> compute_rhs_blended_2d(
     //   RHS[i,j] = -(F_x[i+1,j] - F_x[i,j]) / dx
     //              -(F_y[i,j+1] - F_y[i,j]) / dy
     std::vector<State> RHS(ncell);
+#pragma omp parallel for schedule(static)
     for (int j = 0; j < ny; ++j) {
         const int jp = periodic_index(j + 1, ny);
         for (int i = 0; i < nx; ++i) {
@@ -1528,6 +1529,7 @@ std::vector<double> conserved_entropy_field(
 ) {
     const int ncell = static_cast<int>(U.size());
     std::vector<double> Sc(ncell, 0.0);
+#pragma omp parallel for schedule(static)
     for (int id = 0; id < ncell; ++id) {
         const double rho = U[id][RHO];
         if (!(rho > 0.0) || !std::isfinite(rho)) {
@@ -1567,6 +1569,7 @@ std::vector<double> entropy_rhs_from_mass_flux(
     std::vector<double> fS_x(ncell, 0.0);
     std::vector<double> fS_y(ncell, 0.0);
 
+#pragma omp parallel for schedule(static)
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             const int iL = periodic_index(i - 1, nx);
@@ -1577,6 +1580,7 @@ std::vector<double> entropy_rhs_from_mass_flux(
             fS_x[face] = fm * K_up;
         }
     }
+#pragma omp parallel for schedule(static)
     for (int j = 0; j < ny; ++j) {
         const int jL = periodic_index(j - 1, ny);
         for (int i = 0; i < nx; ++i) {
@@ -1589,6 +1593,7 @@ std::vector<double> entropy_rhs_from_mass_flux(
     }
 
     std::vector<double> rhs(ncell, 0.0);
+#pragma omp parallel for schedule(static)
     for (int j = 0; j < ny; ++j) {
         const int jp = periodic_index(j + 1, ny);
         for (int i = 0; i < nx; ++i) {
@@ -1611,6 +1616,7 @@ void apply_dual_energy_recovery(
     double gamma
 ) {
     const int ncell = static_cast<int>(U.size());
+#pragma omp parallel for schedule(static)
     for (int id = 0; id < ncell; ++id) {
         const double rho = U[id][RHO];
         if (!(rho > 0.0) || !std::isfinite(rho)) {
@@ -1695,6 +1701,7 @@ std::vector<State> positivity_limited_stage(
                 recon, limiter,
                 mass_flux_x_out, mass_flux_y_out);
 
+#pragma omp parallel for schedule(static)
         for (int id = 0; id < ncell; ++id) {
             for (int k = 0; k < NVAR; ++k) {
                 out[id][k] = base[id][k] + coeff * dt * RHS[id][k];
@@ -1787,6 +1794,7 @@ void rk2_step_hlld_2d(
     const std::vector<double> S_rhs1 =
         entropy_rhs_from_mass_flux(U, Sc, mfx, mfy, nx, ny, dx, dy);
     std::vector<double> Sc_s(ncell);
+#pragma omp parallel for schedule(static)
     for (int id = 0; id < ncell; ++id) {
         Sc_s[id] = Sc[id] + dt * S_rhs1[id];
     }
@@ -1814,6 +1822,7 @@ void rk2_step_hlld_2d(
         apply_elliptic_projection_2d(Us, proj_params);
 
         if (repair) {
+#pragma omp parallel for schedule(static)
             for (int id = 0; id < ncell; ++id) {
                 const double old_me =
                     0.5 * (Us_pre[id][BX]*Us_pre[id][BX]
@@ -1830,6 +1839,7 @@ void rk2_step_hlld_2d(
 
     // Corrector: U = 0.5*(U + Us) + 0.5*dt*RHS(Us), positivity-limited (Option A).
     std::vector<State> base(ncell);
+#pragma omp parallel for schedule(static)
     for (int id = 0; id < ncell; ++id) {
         for (int k = 0; k < NVAR; ++k) {
             base[id][k] = 0.5 * (U[id][k] + Us[id][k]);
@@ -1847,6 +1857,7 @@ void rk2_step_hlld_2d(
     const std::vector<double> S_rhs2 =
         entropy_rhs_from_mass_flux(Us, Sc_s, mfx2, mfy2, nx, ny, dx, dy);
     std::vector<double> Sc_new(ncell);
+#pragma omp parallel for schedule(static)
     for (int id = 0; id < ncell; ++id) {
         Sc_new[id] = 0.5 * (Sc[id] + Sc_s[id] + dt * S_rhs2[id]);
     }

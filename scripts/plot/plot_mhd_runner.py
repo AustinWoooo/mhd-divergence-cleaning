@@ -150,6 +150,17 @@ CLEANING_TYPES = [
     "gi_mixed_eglm",
 ]
 
+BLAST_MIN_PRESSURE_METHODS = [
+    "none",
+    "hyperbolic_glm",
+    "mixed_glm",
+    "mixed_eglm",
+    "gi_mixed_eglm",
+    "parabolic",
+    "elliptic_projection",
+    "powell_source",
+]
+
 LABELS = {name: spec["label"] for name, spec in METHODS.items()}
 
 # 8-colour palette drawn from tab10 (colourblind-friendly order).
@@ -503,6 +514,49 @@ def plot_history_all_map_problems(
     axes[-1].set_xlabel("time")
     plt.tight_layout()
     out = out_dir / output_name
+    plt.savefig(out, dpi=220, bbox_inches="tight")
+    print(f"  Saved → {out}")
+    plt.close()
+
+
+def plot_blast_min_pressure(output_name: str = "mhd_runner_blast_min_pressure.png"):
+    spec = PROBLEMS["blast_wave"]
+    prefix = spec["prefix"]
+    fig, ax = plt.subplots(figsize=(8.8, 4.8))
+
+    plotted = 0
+    for method in BLAST_MIN_PRESSURE_METHODS:
+        df = load_diag(prefix, method, warn=True)
+        if df is None:
+            continue
+
+        y = series_or_nan(df, ["min_pressure", "min_p"])
+        style = method_style(method)
+        ax.plot(
+            df["time"],
+            y,
+            color=style["color"],
+            ls=style["ls"],
+            lw=1.9,
+            label=style["label"],
+        )
+        plotted += 1
+
+    if plotted == 0:
+        print("  warning: no blast-wave minimum-pressure data found")
+        plt.close()
+        return
+
+    ax.set_title(spec["title"])
+    ax.set_xlabel("time")
+    ax.set_ylabel("Minimum pressure")
+    ax.set_xlim(left=0.0)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8.5, loc="center left", bbox_to_anchor=(1.02, 0.5))
+    plt.tight_layout()
+
+    out = FIG_PRESSURE_DIR / output_name
+    out.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out, dpi=220, bbox_inches="tight")
     print(f"  Saved → {out}")
     plt.close()
@@ -924,6 +978,7 @@ def main():
         ],
         "mhd_runner_blast_snapshot_projection.png",
     )
+    plot_blast_min_pressure()
 
     print("\n=== Cross-problem diagnostics ===")
     plot_history_all_map_problems(

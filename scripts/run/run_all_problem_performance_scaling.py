@@ -111,12 +111,17 @@ def main() -> int:
                 raise SystemExit(message)
             print(f"WARNING: {message}")
             continue
-        merged_rows.extend(read_rows(output_csv))
+        merged_rows.extend(
+            perf.keep_current_methods(read_rows(output_csv), f"{problem} performance CSV")
+        )
 
     if args.dry_run:
         return 0
     if not merged_rows:
         raise SystemExit("no performance rows were collected")
+    merged_rows = perf.keep_current_methods(merged_rows, "merged performance CSV")
+    if not merged_rows:
+        raise SystemExit("no current-method performance rows were collected")
 
     output_csv = Path(args.output_csv)
     if not output_csv.is_absolute():

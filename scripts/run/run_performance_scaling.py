@@ -33,6 +33,12 @@ PROBLEM_PREFIX = {
     "divergence_advection": "da",
 }
 
+PROBLEM_ORDER = [
+    "divergence_advection",
+    "field_loop",
+    "orszag_tang",
+]
+
 METHOD_ORDER = [
     "none",
     "parabolic",
@@ -368,6 +374,33 @@ def method_label(method: str) -> str:
     return METHOD_LABELS.get(method, method)
 
 
+def problem_sort_key(problem: str) -> tuple[int, str]:
+    try:
+        return (PROBLEM_ORDER.index(problem), problem)
+    except ValueError:
+        return (len(PROBLEM_ORDER), problem)
+
+
+def problem_values(rows: list[dict[str, str | int | float]]) -> list[str]:
+    return sorted({str(row["problem"]) for row in rows}, key=problem_sort_key)
+
+
+def keep_current_methods(
+    rows: list[dict[str, str | int | float]], context: str
+) -> list[dict[str, str | int | float]]:
+    current = set(METHOD_ORDER)
+    kept = [row for row in rows if str(row.get("method", "")) in current]
+    dropped = sorted(
+        {str(row.get("method", "")) for row in rows if str(row.get("method", "")) not in current}
+    )
+    if dropped:
+        print(
+            f"Filtered {len(rows) - len(kept)} unsupported method rows from {context}: "
+            f"{', '.join(dropped)}"
+        )
+    return kept
+
+
 GLM_METHODS = {
     "hyperbolic_glm",
     "mixed_glm",
@@ -530,7 +563,115 @@ def resolution_values(rows: list[dict[str, str | int | float]]) -> list[int]:
     return sorted({int(r["nx"]) for r in rows if int(r["nx"]) == int(r["ny"])})
 
 
+def plot_breakdown_by_problem(
+    rows: list[dict[str, str | int | float]],
+    figure_suffix: str = "",
+    resolution: int | None = None,
+    normalized: bool = False,
+) -> Path | None:
+    rows = keep_current_methods(rows, "multi-problem timing breakdown plot")
+    problems = problem_values(rows)
+    if not problems:
+        print("Skipping multi-problem timing breakdown: no rows")
+        return None
+
+    rows_by_problem = {
+        problem: sorted(
+            [row for row in rows if str(row["problem"]) == problem],
+            key=lambda r: (int(r["ncell"]), method_sort_key(str(r["method"]))),
+        )
+        for problem in problems
+    }
+    max_panel_rows = max(len(group) for group in rows_by_problem.values())
+    ncols = len(problems)
+    fig_width = max(11.5, ncols * max(3.8, 0.32 * max_panel_rows + 1.4))
+    fig_height = 5.8 if resolution is None else 5.0
+    fig, axes = plt.subplots(
+        1,
+        ncols,
+        figsize=(fig_width, fig_height),
+        sharey=True,
+        squeeze=False,
+    )
+
+    plotted_axes: list[plt.Axes] = []
+    for ax, problem in zip(list(axes[0]), problems):
+        problem_rows = rows_by_problem[problem]
+        if normalized:
+            (
+                kept_rows,
+                hydro,
+                cleaning,
+                diagnostics,
+            ) = normalized_timing_components(problem_rows, problem)
+            problem_rows = kept_rows
+            ax.set_ylim(0.0, 1.0)
+        else:
+            hydro, cleaning, diagnostics = timing_components(problem_rows)
+
+        if not problem_rows:
+            ax.set_visible(False)
+            continue
+
+        labels = (
+            [method_label(str(row["method"])) for row in problem_rows]
+            if resolution is not None
+            else [
+                f'{int(row["nx"])}^2\n{method_label(str(row["method"]))}'
+                for row in problem_rows
+            ]
+        )
+        x = list(range(len(problem_rows)))
+        draw_timing_stack(ax, x, hydro, cleaning, diagnostics)
+        ax.set_title(problem, fontsize=10)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45 if resolution is None else 35, ha="right")
+        ax.grid(True, axis="y", alpha=0.3)
+        plotted_axes.append(ax)
+
+    if not plotted_axes:
+        print("Skipping multi-problem timing breakdown: no rows with positive measured time")
+        plt.close(fig)
+        return None
+
+    ylabel = "fraction of measured time" if normalized else "time [s]"
+    plotted_axes[0].set_ylabel(ylabel)
+    for ax in plotted_axes[1:]:
+        ax.tick_params(labelleft=False)
+
+    handles, labels = plotted_axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.91),
+        ncol=3,
+        frameon=False,
+    )
+
+    stem = (
+        "performance_method_breakdown_normalized"
+        if normalized
+        else "performance_method_breakdown"
+    )
+    title = (
+        "Normalized performance timing breakdown"
+        if normalized
+        else "Performance timing breakdown"
+    )
+    suffix = f"; resolution={resolution}^2" if resolution is not None else ""
+    fig.suptitle(f"{title}\n{benchmark_subtitle(rows)}{suffix}", y=0.985)
+
+    out = figure_path(stem, figure_suffix, resolution)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.82))
+    fig.savefig(out, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {out}")
+    return out
+
+
 def plot_walltime(rows: list[dict[str, str | int | float]], figure_suffix: str = "") -> Path:
+    rows = keep_current_methods(rows, "walltime plot")
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(7.2, 5.0))
     for method, group in group_rows(rows).items():
@@ -558,6 +699,7 @@ def plot_walltime(rows: list[dict[str, str | int | float]], figure_suffix: str =
 
 
 def plot_throughput(rows: list[dict[str, str | int | float]], figure_suffix: str = "") -> Path:
+    rows = keep_current_methods(rows, "throughput plot")
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(7.2, 5.0))
     for method, group in group_rows(rows).items():
@@ -585,6 +727,7 @@ def plot_throughput(rows: list[dict[str, str | int | float]], figure_suffix: str
 
 
 def plot_seconds_per_step(rows: list[dict[str, str | int | float]], figure_suffix: str = "") -> Path:
+    rows = keep_current_methods(rows, "seconds-per-step plot")
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(7.2, 5.0))
     for method, group in group_rows(rows).items():
@@ -612,7 +755,11 @@ def plot_seconds_per_step(rows: list[dict[str, str | int | float]], figure_suffi
 
 
 def plot_breakdown(rows: list[dict[str, str | int | float]], figure_suffix: str = "") -> Path:
+    rows = keep_current_methods(rows, "timing breakdown plot")
     FIG_DIR.mkdir(parents=True, exist_ok=True)
+    if len(problem_values(rows)) > 1:
+        return plot_breakdown_by_problem(rows, figure_suffix)
+
     rows = sorted(rows, key=lambda r: (int(r["ncell"]), method_sort_key(str(r["method"]))))
     labels = [f'{r["nx"]}^2\n{method_label(str(r["method"]))}' for r in rows]
     hydro, cleaning, diagnostics = timing_components(rows)
@@ -637,7 +784,11 @@ def plot_breakdown(rows: list[dict[str, str | int | float]], figure_suffix: str 
 def plot_breakdown_normalized(
     rows: list[dict[str, str | int | float]], figure_suffix: str = ""
 ) -> Path | None:
+    rows = keep_current_methods(rows, "normalized timing breakdown plot")
     FIG_DIR.mkdir(parents=True, exist_ok=True)
+    if len(problem_values(rows)) > 1:
+        return plot_breakdown_by_problem(rows, figure_suffix, normalized=True)
+
     sorted_rows = sorted(rows, key=lambda r: (int(r["ncell"]), method_sort_key(str(r["method"]))))
     (
         kept_rows,
@@ -671,6 +822,7 @@ def plot_breakdown_normalized(
 def plot_breakdown_for_resolution(
     rows: list[dict[str, str | int | float]], resolution: int, figure_suffix: str = ""
 ) -> Path | None:
+    rows = keep_current_methods(rows, f"{resolution}^2 timing breakdown plot")
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     expected_methods = sorted({str(r["method"]) for r in rows}, key=method_sort_key)
     selected = [
@@ -681,6 +833,8 @@ def plot_breakdown_for_resolution(
     if not selected:
         print(f"Skipping {resolution}^2 timing breakdown: no matching rows")
         return None
+    if len(problem_values(selected)) > 1:
+        return plot_breakdown_by_problem(selected, figure_suffix, resolution)
 
     present = {str(r["method"]) for r in selected}
     missing = [m for m in expected_methods if m not in present]
@@ -714,6 +868,7 @@ def plot_breakdown_for_resolution(
 def plot_breakdown_normalized_for_resolution(
     rows: list[dict[str, str | int | float]], resolution: int, figure_suffix: str = ""
 ) -> Path | None:
+    rows = keep_current_methods(rows, f"normalized {resolution}^2 timing breakdown plot")
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     expected_methods = sorted({str(r["method"]) for r in rows}, key=method_sort_key)
     selected = [
@@ -724,6 +879,8 @@ def plot_breakdown_normalized_for_resolution(
     if not selected:
         print(f"Skipping normalized {resolution}^2 timing breakdown: no matching rows")
         return None
+    if len(problem_values(selected)) > 1:
+        return plot_breakdown_by_problem(selected, figure_suffix, resolution, normalized=True)
 
     present = {str(r["method"]) for r in selected}
     missing = [m for m in expected_methods if m not in present]
@@ -790,6 +947,7 @@ def plot_normalized_breakdowns_by_resolution(
 
 
 def plot_cleaning_overhead(rows: list[dict[str, str | int | float]], figure_suffix: str = "") -> Path:
+    rows = keep_current_methods(rows, "cleaning overhead plot")
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(7.2, 5.0))
     for method, group in group_rows(rows).items():
@@ -877,6 +1035,14 @@ def main() -> int:
             "WARNING: fewer than 3 grid sizes; this is a sanity run, not a meaningful scaling study.",
             flush=True,
         )
+    requested_methods = args.methods
+    current_methods = set(METHOD_ORDER)
+    args.methods = [method for method in requested_methods if canonical_method(method) in current_methods]
+    skipped_methods = sorted(set(requested_methods).difference(args.methods))
+    if skipped_methods:
+        print(f"Skipping unsupported methods: {', '.join(skipped_methods)}")
+    if not args.methods:
+        raise SystemExit("no current methods requested")
 
     runner = Path(args.runner)
     if not runner.is_absolute():
@@ -953,6 +1119,9 @@ def main() -> int:
         return 0
     if not rows:
         raise SystemExit("no successful benchmark rows were collected")
+    rows = keep_current_methods(rows, "performance scaling CSV")
+    if not rows:
+        raise SystemExit("no current-method benchmark rows were collected")
 
     output_csv = Path(args.output_csv)
     if not output_csv.is_absolute():

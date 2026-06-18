@@ -165,11 +165,25 @@ target_link_libraries(mhd_runner_cli
 )
 
 if(ENABLE_MPI)
+    # Coarse-grained MPI: one independent whole-grid case per rank.
     add_executable(mhd_sweep_mpi
         src/mhd_sweep_mpi.cpp
     )
 
     target_link_libraries(mhd_sweep_mpi
+        PRIVATE
+            mhd_runner
+            MPI::MPI_CXX
+    )
+
+    # Fine-grained MPI: a single simulation split across ranks (2D domain
+    # decomposition).  run_mhd_2d_case detects the multi-rank communicator and
+    # decomposes internally; this is just the MPI_Init/Finalize entry point.
+    add_executable(mhd_runner_mpi
+        src/mhd_runner_mpi.cpp
+    )
+
+    target_link_libraries(mhd_runner_mpi
         PRIVATE
             mhd_runner
             MPI::MPI_CXX
@@ -282,5 +296,30 @@ if(ENABLE_MPI)
     set_tests_properties(
         mhd_sweep_mpi_smoke_check
         PROPERTIES DEPENDS mhd_sweep_mpi_smoke_generate
+    )
+
+    # Domain decomposition: a single 32x32 orszag_tang run split over a 2x2
+    # process grid (16x16 per rank), then the usual runner sanity check on the
+    # gathered summaries.  Exercises halos, collective reductions, and gather I/O.
+    add_test(
+        NAME mhd_runner_mpi_smoke_generate
+        COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+                ${MPIEXEC_PREFLAGS}
+                $<TARGET_FILE:mhd_runner_mpi>
+                ${MPIEXEC_POSTFLAGS}
+                --smoke --output-prefix mpidd orszag_tang none mixed_glm
+    )
+
+    add_test(
+        NAME mhd_runner_mpi_smoke_check
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check/check_mhd_runner_sanity.py
+                --prefix mpidd_smoke
+                --methods none mixed_glm
+    )
+
+    set_tests_properties(
+        mhd_runner_mpi_smoke_check
+        PROPERTIES DEPENDS mhd_runner_mpi_smoke_generate
     )
 endif()

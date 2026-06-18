@@ -2379,17 +2379,54 @@ void run_mhd_2d_case(
     params.diagnostic_stride = std::max(1, params.diagnostic_stride);
     validate_glm_tuning_params(params.glm);
 
-    // Derive grid spacing from domain size and resolution.
+    // Grid spacing is derived from the requested (global) resolution.
     params.glm.dx = params.glm.xlen / static_cast<double>(params.glm.nx);
     params.glm.dy = params.glm.ylen / static_cast<double>(params.glm.ny);
 
-    const int    nx    = params.glm.nx;
-    const int    ny    = params.glm.ny;
+    const int nx_g = params.glm.nx;
+    const int ny_g = params.glm.ny;
+
+    // Optional 2D domain decomposition: active only under a genuine multi-rank
+    // MPI run.  Otherwise `domain` stays null and every mpi_domain helper used
+    // below is the serial identity, so this path is bit-for-bit unchanged.
+    const MPIDomain* domain = nullptr;
+#ifdef ENABLE_MPI
+    MPIDomain domain_storage;
+    {
+        int mpi_ready = 0;
+        MPI_Initialized(&mpi_ready);
+        if (mpi_ready) {
+            int world = 1;
+            MPI_Comm_size(MPI_COMM_WORLD, &world);
+            if (world > 1) {
+                domain_storage = make_domain(nx_g, ny_g, /*ng=*/2);
+                domain = &domain_storage;
+            }
+        }
+    }
+#endif
+
+    // Refuse decompositions that would need the global Poisson solve, up front.
+    ensure_projection_supported_under_mpi(
+        type == CleaningType::ELLIPTIC_PROJECTION ||
+            params.glm.project_each_stage,
+        domain);
+
+    // Kernel/array dimensions: this rank's ghost-padded local block under
+    // decomposition, the full global grid in serial.  Physical spacing dx/dy
+    // stays global.  params.glm.nx/ny are set to the padded dims so the unchanged
+    // cleaning kernels index the local array directly.
+    const int    nx    = domain ? domain->nx_pad() : nx_g;
+    const int    ny    = domain ? domain->ny_pad() : ny_g;
     const double dx    = params.glm.dx;
     const double dy    = params.glm.dy;
     const double t_end = params.glm.t_end;
     const double cfl   = params.glm.cfl;
     const double gamma = params.gamma;
+    if (domain) {
+        params.glm.nx = nx;
+        params.glm.ny = ny;
+    }
 
     // Task C: stage projection pointer (only for ELLIPTIC_PROJECTION runs with
     // project_each_stage enabled).
@@ -2397,16 +2434,16 @@ void run_mhd_2d_case(
         (type == CleaningType::ELLIPTIC_PROJECTION) &&
         params.glm.project_each_stage;
 
-    // Initialize state.
-    std::vector<State> U(nx * ny);
+    // Initialize state (each rank fills the interior of its padded local block).
+    std::vector<State> U(static_cast<std::size_t>(nx) * ny);
     if (params.problem == "orszag_tang") {
-        initialize_orszag_tang_2d(U, params);
+        initialize_orszag_tang_2d(U, params, domain);
     } else if (params.problem == "field_loop") {
-        initialize_field_loop_2d(U, params);
+        initialize_field_loop_2d(U, params, domain);
     } else if (params.problem == "divergence_advection") {
-        initialize_divergence_advection_2d(U, params);
+        initialize_divergence_advection_2d(U, params, domain);
     } else if (params.problem == "blast_wave") {
-        initialize_blast_wave_2d(U, params);
+        initialize_blast_wave_2d(U, params, domain);
     } else {
         throw std::invalid_argument(
             "run_mhd_2d_case: unknown problem '" + params.problem + "'"
@@ -2414,8 +2451,10 @@ void run_mhd_2d_case(
     }
 
     // Freeze ch at the initial max signal speed (Dedner 2002 convention),
-    // with optional paper-consistent scaling.
-    const double ch_init = max_signal_speed_2d(U, gamma, 0.0, false);
+    // with optional paper-consistent scaling.  Fill ghosts first so the
+    // ghost-inclusive (idempotent) max is valid, then reduce across ranks.
+    exchange_halos(U, domain);
+    const double ch_init = max_signal_speed_2d(U, gamma, 0.0, false, domain);
     params.glm.ch = params.glm.glm_ch_factor * ch_init;
 
     const bool glm_active = is_glm_cleaning(type);
@@ -2426,20 +2465,34 @@ void run_mhd_2d_case(
     MHDRunTiming timing;
     timing.initialization_time_sec += seconds_since(init_start);
 
-    fs::create_directories(fs::path(params.output_root) / "divergence");
-    fs::create_directories(fs::path(params.output_root) / "snapshots");
-    fs::create_directories(fs::path(params.output_root) / "summaries");
-    if (projection_correction_diagnostics_active(params, type)) {
-        initialize_projection_diagnostics_summary_csv(params, name);
+    // Only the root rank performs file I/O; the other ranks feed it through
+    // collective gathers.  Always true in serial.
+    const bool is_root = (!domain || !domain->active || domain->rank == 0);
+
+    if (is_root) {
+        fs::create_directories(fs::path(params.output_root) / "divergence");
+        fs::create_directories(fs::path(params.output_root) / "snapshots");
+        fs::create_directories(fs::path(params.output_root) / "summaries");
+        if (projection_correction_diagnostics_active(params, type)) {
+            initialize_projection_diagnostics_summary_csv(params, name);
+        }
     }
 
+    // Initial total energy is a global sum: evaluate it on the gathered global
+    // field (root rank) so energy_drift below is correct under decomposition.
     const auto initial_diag_start = Clock::now();
-    const MHDRunDiagnostics initial_diag =
-        compute_mhd_run_diagnostics(U, gamma, dx * dy);
+    double energy_initial = 0.0;
+    {
+        const std::vector<State> Uglob0 = gather_to_root(U, domain);
+        if (is_root) {
+            energy_initial =
+                compute_mhd_run_diagnostics(Uglob0, gamma, dx * dy).total_energy;
+        }
+    }
     timing.diagnostics_compute_time_sec += seconds_since(initial_diag_start);
-    const double energy_initial = initial_diag.total_energy;
 
-    // Initial snapshot (optional).
+    // Initial snapshot (optional).  write_mhd_2d_snapshot gathers internally, so
+    // every rank must call it; only the root rank writes the file.
     if (params.glm.write_snapshot && params.glm.write_initial_snapshot) {
         const std::string snap =
             runner_output_path(
@@ -2448,23 +2501,27 @@ void run_mhd_2d_case(
                 prefix + "_" + name + "_initial.csv"
             ).string();
         const auto snapshot_start = Clock::now();
-        write_mhd_2d_snapshot(U, params, snap);
+        write_mhd_2d_snapshot(U, params, snap, domain);
         timing.snapshot_write_time_sec += seconds_since(snapshot_start);
-        std::cout << "  Wrote " << snap << "\n";
+        if (is_root) {
+            std::cout << "  Wrote " << snap << "\n";
+        }
     }
 
-    // Diagnostics CSV.
+    // Diagnostics CSV (written by the root rank only).
     const std::string diag_name =
         runner_output_path(
             params,
             "divergence",
             prefix + "_" + name + ".csv"
         ).string();
-    std::ofstream diag(diag_name);
-    if (!diag) {
-        throw std::runtime_error("Failed to open diagnostic file: " + diag_name);
-    }
-    {
+    std::ofstream diag;
+    if (is_root) {
+        diag.open(diag_name);
+        if (!diag) {
+            throw std::runtime_error(
+                "Failed to open diagnostic file: " + diag_name);
+        }
         const auto diag_write_start = Clock::now();
         diag << "step,time,dt,"
              << "L1_fv,L2_fv,Linf_fv,"
@@ -2514,11 +2571,18 @@ void run_mhd_2d_case(
     double max_cfast_seen = ch_init;
 
     while (true) {
+        // Refresh ghost cells so the idempotent (max/min/OR) reductions and the
+        // scans below are valid; rk2/cleaning re-exchange internally.  No-op in
+        // serial.
+        exchange_halos(U, domain);
+
         const auto diag_compute_start = Clock::now();
-        const LocalDivBNorms norms =
-            compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
+        // run_diag's failure flags and minima are globally reduced here (so the
+        // has_mhd_run_failure verdict is collective).  Its conservation sums are
+        // rank-local and unused for that decision; the diagnostic row recomputes
+        // sums and divB norms from the gathered global field below.
         const MHDRunDiagnostics run_diag =
-            compute_mhd_run_diagnostics(U, gamma, dx * dy);
+            compute_mhd_run_diagnostics(U, gamma, dx * dy, domain);
         timing.diagnostics_compute_time_sec += seconds_since(diag_compute_start);
 
         if (should_write_diagnostic_row(
@@ -2528,22 +2592,32 @@ void run_mhd_2d_case(
                 has_mhd_run_failure(run_diag),
                 params.diagnostic_stride
             )) {
-            const auto diag_write_start = Clock::now();
-            write_mhd_diagnostic_row(
-                diag,
-                step,
-                t,
-                params.glm.dt,
-                norms,
-                run_diag,
-                last_cleaning_subcycles_step,
-                last_projection_iterations_step,
-                last_projection_solver_update_residual,
-                last_projection_final_residual,
-                last_projection_true_residual,
-                last_projection_converged
-            );
-            timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
+            // Sums and norms are global quantities: evaluate them on the gathered
+            // global field (collective), and write the row on the root rank.
+            const std::vector<State> Uglob = gather_to_root(U, domain);
+            if (is_root) {
+                const LocalDivBNorms gnorms =
+                    compute_fv_divB_norms_2d(Uglob, nx_g, ny_g, dx, dy);
+                const MHDRunDiagnostics gdiag =
+                    compute_mhd_run_diagnostics(Uglob, gamma, dx * dy);
+                const auto diag_write_start = Clock::now();
+                write_mhd_diagnostic_row(
+                    diag,
+                    step,
+                    t,
+                    params.glm.dt,
+                    gnorms,
+                    gdiag,
+                    last_cleaning_subcycles_step,
+                    last_projection_iterations_step,
+                    last_projection_solver_update_residual,
+                    last_projection_final_residual,
+                    last_projection_true_residual,
+                    last_projection_converged
+                );
+                timing.diagnostics_write_time_sec +=
+                    seconds_since(diag_write_start);
+            }
         }
 
         if (has_mhd_run_failure(run_diag)) {
@@ -2556,7 +2630,7 @@ void run_mhd_2d_case(
             } else if (run_diag.has_negative_pressure) {
                 failure_reason = "negative_pressure";
             }
-            const MinPhysical mp = compute_min_physical(U, gamma);
+            const MinPhysical mp = compute_min_physical(U, gamma, domain);
             run_stage_mins.min_pressure_after_full_step = std::min(
                 run_stage_mins.min_pressure_after_full_step,
                 mp.min_pressure
@@ -2566,56 +2640,52 @@ void run_mhd_2d_case(
                 mp.min_density
             );
             run_stage_mins.failure_stage = "step_start_diagnostic";
-            BadStateRecord top_bad =
-                scan_physical_state(
-                    U,
-                    nx,
-                    ny,
-                    dx,
-                    dy,
-                    gamma,
-                    "step_start_diagnostic"
-                );
-            if (!top_bad.found) {
-                top_bad = scan_raw_primitive_state(
-                    U,
-                    nx,
-                    ny,
-                    dx,
-                    dy,
-                    gamma,
-                    "step_start_diagnostic"
-                );
-            }
-            if (top_bad.found) {
-                const auto diag_write_start = Clock::now();
-                write_cleaning_failure_csv(
+
+            // Locate and report the offending cell on the gathered global field
+            // (collective gather; root writes).  Serial gathers to itself.
+            const std::vector<State> Uglob = gather_to_root(U, domain);
+            if (is_root) {
+                BadStateRecord top_bad =
+                    scan_physical_state(
+                        Uglob, nx_g, ny_g, dx, dy, gamma,
+                        "step_start_diagnostic");
+                if (!top_bad.found) {
+                    top_bad = scan_raw_primitive_state(
+                        Uglob, nx_g, ny_g, dx, dy, gamma,
+                        "step_start_diagnostic");
+                }
+                if (top_bad.found) {
+                    const auto diag_write_start = Clock::now();
+                    write_cleaning_failure_csv(
+                        params,
+                        name,
+                        step,
+                        failure_time,
+                        top_bad,
+                        run_stage_mins,
+                        run_projection_theta,
+                        run_total_retries,
+                        run_min_dt_used
+                    );
+                    timing.diagnostics_write_time_sec +=
+                        seconds_since(diag_write_start);
+                }
+                print_mhd_run_failure_warning(
                     params,
                     name,
                     step,
-                    failure_time,
-                    top_bad,
-                    run_stage_mins,
-                    run_projection_theta,
-                    run_total_retries,
-                    run_min_dt_used
+                    t,
+                    params.glm.dt,
+                    run_diag
                 );
-                timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
             }
-            print_mhd_run_failure_warning(
-                params,
-                name,
-                step,
-                t,
-                params.glm.dt,
-                run_diag
-            );
             break;
         }
 
         if (t >= t_end - 1e-12) break;
 
-        const double smax = max_signal_speed_2d(U, gamma, ch_init, glm_active);
+        const double smax =
+            max_signal_speed_2d(U, gamma, ch_init, glm_active, domain);
         max_cfast_seen = std::max(max_cfast_seen, smax);
         double dt = cfl * std::min(dx, dy) / smax;
         dt = std::min(dt, t_end - t);
@@ -2626,7 +2696,7 @@ void run_mhd_2d_case(
         // =====================================================================
         StagePressureMins step_stage_mins;
         {
-            const MinPhysical mp = compute_min_physical(U, gamma);
+            const MinPhysical mp = compute_min_physical(U, gamma, domain);
             step_stage_mins.min_pressure_before_hydro = mp.min_pressure;
             step_stage_mins.min_density_before_hydro  = mp.min_density;
         }
@@ -2652,6 +2722,11 @@ void run_mhd_2d_case(
         CleaningAdvanceStats cleaning_stats;
         MinPhysical accepted_after_hydro_min;
         bool have_accepted_after_hydro_min = false;
+        // Collective failure flags: every rank must take the same retry / accept
+        // branch, or it would desync on the collective halo exchanges inside the
+        // next rk2/cleaning step.  In serial these equal the local .found flags.
+        bool after_hydro_failed = false;
+        bool cleaning_failed    = false;
 
         while (true) {
             U = U_begin;
@@ -2665,11 +2740,11 @@ void run_mhd_2d_case(
             if (do_stage_projection) {
                 rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt,
                                  params.reconstruction, params.limiter,
-                                 &params.glm);
+                                 &params.glm, domain);
             } else {
                 rk2_step_hlld_2d(U, nx, ny, dx, dy, gamma, dt,
                                  params.reconstruction, params.limiter,
-                                 nullptr);
+                                 nullptr, domain);
             }
             timing.hydro_time_sec += seconds_since(hydro_start);
 
@@ -2683,8 +2758,10 @@ void run_mhd_2d_case(
                     gamma,
                     "after_hydro_step"
                 );
+            after_hydro_failed =
+                global_lor(after_hydro_bad.found ? 1 : 0, domain) != 0;
 
-            if (after_hydro_bad.found) {
+            if (after_hydro_failed) {
                 if (total_retries < max_retries) {
                     dt *= 0.5;
                     ++total_retries;
@@ -2694,7 +2771,7 @@ void run_mhd_2d_case(
                 break;
             }
 
-            accepted_after_hydro_min = compute_min_physical(U, gamma);
+            accepted_after_hydro_min = compute_min_physical(U, gamma, domain);
             have_accepted_after_hydro_min = true;
 
             // ------------------------------------------------------------------
@@ -2714,11 +2791,14 @@ void run_mhd_2d_case(
                     gamma,
                     type == CleaningType::PARABOLIC &&
                         !printed_parabolic_subcycling,
-                    max_cfast_seen
+                    max_cfast_seen,
+                    domain
                 );
             timing.cleaning_time_sec += seconds_since(cleaning_start);
+            cleaning_failed =
+                global_lor(cleaning_stats.bad_state.found ? 1 : 0, domain) != 0;
 
-            if (cleaning_stats.bad_state.found && total_retries < max_retries) {
+            if (cleaning_failed && total_retries < max_retries) {
                 // Cleaning failed: halve dt and retry the full step.
                 dt *= 0.5;
                 ++total_retries;
@@ -2779,8 +2859,8 @@ void run_mhd_2d_case(
         const double next_t = t + dt;
         const int next_step = step + 1;
 
-        if (total_retries > 0 && !after_hydro_bad.found &&
-            !cleaning_stats.bad_state.found) {
+        if (is_root && total_retries > 0 && !after_hydro_failed &&
+            !cleaning_failed) {
             std::cout << "  [" << name << "] step retry accepted"
                       << "  retries=" << total_retries
                       << "  step=" << next_step
@@ -2788,72 +2868,69 @@ void run_mhd_2d_case(
         }
 
         // ------------------------------------------------------------------
-        // Handle hydro failure (after retries exhausted).
+        // Handle hydro failure (after retries exhausted).  Collective: every
+        // rank entered the loop the same number of times, so after_hydro_failed
+        // is identical on all of them; the report is built on the gathered
+        // global field and written by the root rank only.
         // ------------------------------------------------------------------
-        if (after_hydro_bad.found) {
+        if (after_hydro_failed) {
             stopped_for_failure = true;
             failure_time = next_t;
             failure_reason =
-                "hydro_positivity_failure:" + after_hydro_bad.reason
-                + ":retries=" + std::to_string(total_retries);
-
+                "hydro_positivity_failure:retries="
+                + std::to_string(total_retries);
             step_stage_mins.failure_stage = "after_hydro_step";
             run_stage_mins.failure_stage  = "after_hydro_step";
 
-            {
+            const std::vector<State> Uglob = gather_to_root(U, domain);
+            if (is_root) {
+                // In serial Uglob == U and the local record is exact; under
+                // decomposition re-scan the global field to find the offender.
+                BadStateRecord rep = after_hydro_bad;
+                if (domain && domain->active) {
+                    rep = scan_physical_state(Uglob, nx_g, ny_g, dx, dy, gamma,
+                                              "after_hydro_step");
+                    if (!rep.found) {
+                        rep = scan_raw_primitive_state(
+                            Uglob, nx_g, ny_g, dx, dy, gamma, "after_hydro_step");
+                    }
+                }
+                failure_reason =
+                    "hydro_positivity_failure:" + rep.reason
+                    + ":retries=" + std::to_string(total_retries);
+
                 const auto diag_write_start = Clock::now();
                 write_cleaning_failure_csv(
-                    params,
-                    name,
-                    next_step,
-                    failure_time,
-                    after_hydro_bad,
-                    step_stage_mins,
-                    cleaning_stats.projection_theta,
-                    total_retries,
-                    min_dt_used
-                );
-                timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
+                    params, name, next_step, failure_time, rep,
+                    step_stage_mins, cleaning_stats.projection_theta,
+                    total_retries, min_dt_used);
+
+                const LocalDivBNorms failed_norms =
+                    compute_fv_divB_norms_2d(Uglob, nx_g, ny_g, dx, dy);
+                const MHDRunDiagnostics failed_diag =
+                    compute_mhd_run_diagnostics(Uglob, gamma, dx * dy);
+                write_mhd_diagnostic_row(
+                    diag, next_step, failure_time, params.glm.dt,
+                    failed_norms, failed_diag, 0, 0,
+                    std::numeric_limits<double>::quiet_NaN(),
+                    std::numeric_limits<double>::quiet_NaN(),
+                    std::numeric_limits<double>::quiet_NaN(),
+                    true);
+                timing.diagnostics_write_time_sec +=
+                    seconds_since(diag_write_start);
+
+                std::cerr << "WARNING: stopping MHD run after hydro update produced bad state"
+                          << "  problem=" << params.problem
+                          << "  cleaning=" << name
+                          << "  step=" << next_step
+                          << "  time=" << failure_time
+                          << "  reason=" << rep.reason
+                          << "  cell=(" << rep.i << "," << rep.j << ")"
+                          << "  rho=" << rep.rho
+                          << "  p=" << rep.pressure
+                          << "  retries=" << total_retries
+                          << "\n";
             }
-
-            const auto failed_diag_compute_start = Clock::now();
-            const LocalDivBNorms failed_norms =
-                compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
-            const MHDRunDiagnostics failed_diag =
-                compute_mhd_run_diagnostics(U, gamma, dx * dy);
-            timing.diagnostics_compute_time_sec +=
-                seconds_since(failed_diag_compute_start);
-
-            const auto failed_diag_write_start = Clock::now();
-            write_mhd_diagnostic_row(
-                diag,
-                next_step,
-                failure_time,
-                params.glm.dt,
-                failed_norms,
-                failed_diag,
-                0,
-                0,
-                std::numeric_limits<double>::quiet_NaN(),
-                std::numeric_limits<double>::quiet_NaN(),
-                std::numeric_limits<double>::quiet_NaN(),
-                true
-            );
-            timing.diagnostics_write_time_sec +=
-                seconds_since(failed_diag_write_start);
-
-            std::cerr << "WARNING: stopping MHD run after hydro update produced bad state"
-                      << "  problem=" << params.problem
-                      << "  cleaning=" << name
-                      << "  step=" << next_step
-                      << "  time=" << failure_time
-                      << "  reason=" << after_hydro_bad.reason
-                      << "  cell=(" << after_hydro_bad.i
-                      << "," << after_hydro_bad.j << ")"
-                      << "  rho=" << after_hydro_bad.rho
-                      << "  p=" << after_hydro_bad.pressure
-                      << "  retries=" << total_retries
-                      << "\n";
 
             t = failure_time;
             step = next_step;
@@ -2893,7 +2970,7 @@ void run_mhd_2d_case(
 
         // Task A: record min physical after the full step.
         {
-            const MinPhysical mp = compute_min_physical(U, gamma);
+            const MinPhysical mp = compute_min_physical(U, gamma, domain);
             step_stage_mins.min_pressure_after_full_step = mp.min_pressure;
             step_stage_mins.min_density_after_full_step  = mp.min_density;
             run_stage_mins.min_pressure_after_full_step = std::min(
@@ -2901,101 +2978,98 @@ void run_mhd_2d_case(
                 mp.min_pressure);
         }
 
-        if (cleaning_stats.bad_state.found) {
+        if (cleaning_failed) {
             stopped_for_failure = true;
+            // failure_time is identical on every rank: the cleaning subcycle loop
+            // exits collectively (commit-4 global_lor), so all ranks recorded the
+            // same time + dt_sub*(sub+1).
             failure_time = cleaning_stats.failure_time;
-            failure_reason =
-                "cleaning_induced_failure:" + cleaning_stats.bad_state.reason
-                + ":retries=" + std::to_string(total_retries);
 
             if (step_stage_mins.failure_stage.empty()) {
                 step_stage_mins.failure_stage =
                     determine_failure_stage(step_stage_mins);
             }
             run_stage_mins.failure_stage = step_stage_mins.failure_stage;
-
-            {
-                const auto diag_write_start = Clock::now();
-                write_cleaning_failure_csv(
-                    params,
-                    name,
-                    step,
-                    failure_time,
-                    cleaning_stats.bad_state,
-                    step_stage_mins,
-                    cleaning_stats.projection_theta,
-                    total_retries,
-                    min_dt_used
-                );
-                timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
-            }
-
             t = failure_time;
 
-            const auto failed_diag_compute_start = Clock::now();
-            const LocalDivBNorms failed_norms =
-                compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
-            const MHDRunDiagnostics failed_diag =
-                compute_mhd_run_diagnostics(U, gamma, dx * dy);
-            timing.diagnostics_compute_time_sec +=
-                seconds_since(failed_diag_compute_start);
+            const std::vector<State> Uglob = gather_to_root(U, domain);
+            if (is_root) {
+                BadStateRecord rep = cleaning_stats.bad_state;
+                if (domain && domain->active) {
+                    rep = scan_physical_state(Uglob, nx_g, ny_g, dx, dy, gamma,
+                                              "after_cleaning");
+                    if (!rep.found) {
+                        rep = scan_raw_primitive_state(
+                            Uglob, nx_g, ny_g, dx, dy, gamma, "after_cleaning");
+                    }
+                }
+                failure_reason =
+                    "cleaning_induced_failure:" + rep.reason
+                    + ":retries=" + std::to_string(total_retries);
 
-            const auto failed_diag_write_start = Clock::now();
-            write_mhd_diagnostic_row(
-                diag,
-                step,
-                t,
-                params.glm.dt,
-                failed_norms,
-                failed_diag,
-                cleaning_stats.subcycles,
-                cleaning_stats.projection_iterations,
-                cleaning_stats.projection_solver_update_residual,
-                cleaning_stats.projection_final_residual,
-                cleaning_stats.projection_true_residual,
-                cleaning_stats.projection_converged
-            );
-            timing.diagnostics_write_time_sec +=
-                seconds_since(failed_diag_write_start);
+                const auto diag_write_start = Clock::now();
+                write_cleaning_failure_csv(
+                    params, name, step, failure_time, rep, step_stage_mins,
+                    cleaning_stats.projection_theta, total_retries, min_dt_used);
 
-            std::cerr << "WARNING: stopping MHD run after cleaning produced bad state"
-                      << "  problem=" << params.problem
-                      << "  cleaning=" << name
-                      << "  step=" << step
-                      << "  time=" << t
-                      << "  reason=" << failure_reason
-                      << "  cell=(" << cleaning_stats.bad_state.i
-                      << "," << cleaning_stats.bad_state.j << ")"
-                      << "  rho=" << cleaning_stats.bad_state.rho
-                      << "  p=" << cleaning_stats.bad_state.pressure
-                      << "  failure_stage=" << step_stage_mins.failure_stage
-                      << "  theta=" << cleaning_stats.projection_theta
-                      << "  retries=" << total_retries
-                      << "\n";
+                const LocalDivBNorms failed_norms =
+                    compute_fv_divB_norms_2d(Uglob, nx_g, ny_g, dx, dy);
+                const MHDRunDiagnostics failed_diag =
+                    compute_mhd_run_diagnostics(Uglob, gamma, dx * dy);
+                write_mhd_diagnostic_row(
+                    diag, step, t, params.glm.dt, failed_norms, failed_diag,
+                    cleaning_stats.subcycles,
+                    cleaning_stats.projection_iterations,
+                    cleaning_stats.projection_solver_update_residual,
+                    cleaning_stats.projection_final_residual,
+                    cleaning_stats.projection_true_residual,
+                    cleaning_stats.projection_converged);
+                timing.diagnostics_write_time_sec +=
+                    seconds_since(diag_write_start);
+
+                std::cerr << "WARNING: stopping MHD run after cleaning produced bad state"
+                          << "  problem=" << params.problem
+                          << "  cleaning=" << name
+                          << "  step=" << step
+                          << "  time=" << t
+                          << "  reason=" << failure_reason
+                          << "  cell=(" << rep.i << "," << rep.j << ")"
+                          << "  rho=" << rep.rho
+                          << "  p=" << rep.pressure
+                          << "  failure_stage=" << step_stage_mins.failure_stage
+                          << "  theta=" << cleaning_stats.projection_theta
+                          << "  retries=" << total_retries
+                          << "\n";
+            } else {
+                failure_reason =
+                    "cleaning_induced_failure:retries="
+                    + std::to_string(total_retries);
+            }
             break;
         }
 
-        if (step % 200 == 0) {
+        if (is_root && step % 200 == 0) {
             std::cout << "  [" << name << "] step=" << step
                       << "  t=" << t << "  dt=" << dt << "\n";
         }
     }
 
-    if (stopped_for_failure) {
-        std::cout << "  [" << name << "] stopped after failure: " << step
-                  << " steps, t=" << t << "\n";
-    } else {
-        std::cout << "  [" << name << "] finished: " << step
-                  << " steps, t=" << t << "\n";
-    }
+    if (is_root) {
+        if (stopped_for_failure) {
+            std::cout << "  [" << name << "] stopped after failure: " << step
+                      << " steps, t=" << t << "\n";
+        } else {
+            std::cout << "  [" << name << "] finished: " << step
+                      << " steps, t=" << t << "\n";
+        }
 
-    {
         const auto diag_write_start = Clock::now();
         diag.flush();
         timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
     }
 
-    // Final snapshot.
+    // Final snapshot.  write_mhd_2d_snapshot gathers internally (collective), so
+    // all ranks call it; only the root rank writes.
     if (params.glm.write_snapshot) {
         const std::string snap =
             runner_output_path(
@@ -3004,23 +3078,35 @@ void run_mhd_2d_case(
                 prefix + "_" + name + "_final.csv"
             ).string();
         const auto snapshot_start = Clock::now();
-        write_mhd_2d_snapshot(U, params, snap);
+        write_mhd_2d_snapshot(U, params, snap, domain);
         timing.snapshot_write_time_sec += seconds_since(snapshot_start);
-        std::cout << "  Wrote " << snap << "\n";
+        if (is_root) {
+            std::cout << "  Wrote " << snap << "\n";
+        }
     }
 
+    // Final diagnostics on the gathered global field (these feed the summary
+    // row).  Collective gather; the norms/sums are evaluated on the root rank.
     const auto final_diag_compute_start = Clock::now();
-    const LocalDivBNorms final_norms =
-        compute_fv_divB_norms_2d(U, nx, ny, dx, dy);
-    const MHDRunDiagnostics final_diag =
-        compute_mhd_run_diagnostics(U, gamma, dx * dy);
+    const std::vector<State> Uglob_final = gather_to_root(U, domain);
+    LocalDivBNorms final_norms;
+    MHDRunDiagnostics final_diag;
+    if (is_root) {
+        final_norms = compute_fv_divB_norms_2d(Uglob_final, nx_g, ny_g, dx, dy);
+        final_diag = compute_mhd_run_diagnostics(Uglob_final, gamma, dx * dy);
+    }
     timing.diagnostics_compute_time_sec += seconds_since(final_diag_compute_start);
     const bool final_time_reached =
         !stopped_for_failure && t >= t_end - 1.0e-12;
 
     timing.steps = step;
     timing.total_wall_time_sec = seconds_since(run_start);
-    finalize_timing_fields(timing, nx, ny);
+    // Use the global grid size for the cells/step throughput metric.
+    finalize_timing_fields(timing, nx_g, ny_g);
+
+    if (!is_root) {
+        return;  // non-root ranks have no summary to write
+    }
 
     auto write_summary_with_timing = [&](const MHDRunTiming& timing_for_file) {
         write_mhd_run_summary(

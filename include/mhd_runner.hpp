@@ -20,6 +20,7 @@
 
 #include "glm2d_types.hpp"
 #include "mhd_reconstruction.hpp"
+#include "mpi_domain.hpp"
 #include "state.hpp"
 
 struct MHDRunParams {
@@ -59,24 +60,32 @@ struct MHDRunParams {
     bool write_projection_diagnostics = false;
 };
 
+// The optional `domain` selects 2D domain decomposition: when non-null and
+// active, each rank fills the interior of its ghost-padded local array using the
+// global cell coordinates (i0 + i_loc, j0 + j_loc).  domain == nullptr (the
+// default) fills the full nx*ny global grid exactly as before.
 void initialize_orszag_tang_2d(
     std::vector<State>& U,
-    const MHDRunParams& params
+    const MHDRunParams& params,
+    const MPIDomain* domain = nullptr
 );
 
 void initialize_field_loop_2d(
     std::vector<State>& U,
-    const MHDRunParams& params
+    const MHDRunParams& params,
+    const MPIDomain* domain = nullptr
 );
 
 void initialize_divergence_advection_2d(
     std::vector<State>& U,
-    const MHDRunParams& params
+    const MHDRunParams& params,
+    const MPIDomain* domain = nullptr
 );
 
 void initialize_blast_wave_2d(
     std::vector<State>& U,
-    const MHDRunParams& params
+    const MHDRunParams& params,
+    const MPIDomain* domain = nullptr
 );
 
 void run_mhd_2d_case(

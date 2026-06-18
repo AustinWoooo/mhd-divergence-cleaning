@@ -8,7 +8,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(OpenMP REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-option(ENABLE_MPI "Build optional coarse-grained MPI sweep runner" OFF)
+option(ENABLE_MPI "Build with MPI: coarse-grained sweep runner + solver domain decomposition" OFF)
+
+# MPI is used in two independent ways when ENABLE_MPI is ON:
+#   1. coarse-grained sweep over independent cases (src/mhd_sweep_mpi.cpp)
+#   2. fine-grained 2D domain decomposition inside the runner
+#      (src/mpi_domain.cpp, gated per-translation-unit by -DENABLE_MPI)
+# Without ENABLE_MPI the runner falls back to the inline no-op stubs in
+# include/mpi_domain.hpp and is bit-for-bit identical to the serial build.
+if(ENABLE_MPI)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+endif()
 
 include_directories(include)
 
@@ -80,6 +90,15 @@ target_link_libraries(glm2d
         OpenMP::OpenMP_CXX
 )
 
+# Domain-decomposition layer.  Compiled into glm2d (the lowest library shared by
+# the cleaning kernels and the runner) so its symbols are available to every
+# dependent target.  ENABLE_MPI is PUBLIC so dependents see the same header view.
+if(ENABLE_MPI)
+    target_sources(glm2d PRIVATE src/mpi_domain.cpp)
+    target_compile_definitions(glm2d PUBLIC ENABLE_MPI)
+    target_link_libraries(glm2d PUBLIC MPI::MPI_CXX)
+endif()
+
 # ============================================================
 # 1D GLM test executable
 # ============================================================
@@ -146,13 +165,25 @@ target_link_libraries(mhd_runner_cli
 )
 
 if(ENABLE_MPI)
-    find_package(MPI REQUIRED COMPONENTS CXX)
-
+    # Coarse-grained MPI: one independent whole-grid case per rank.
     add_executable(mhd_sweep_mpi
         src/mhd_sweep_mpi.cpp
     )
 
     target_link_libraries(mhd_sweep_mpi
+        PRIVATE
+            mhd_runner
+            MPI::MPI_CXX
+    )
+
+    # Fine-grained MPI: a single simulation split across ranks (2D domain
+    # decomposition).  run_mhd_2d_case detects the multi-rank communicator and
+    # decomposes internally; this is just the MPI_Init/Finalize entry point.
+    add_executable(mhd_runner_mpi
+        src/mhd_runner_mpi.cpp
+    )
+
+    target_link_libraries(mhd_runner_mpi
         PRIVATE
             mhd_runner
             MPI::MPI_CXX
@@ -265,5 +296,30 @@ if(ENABLE_MPI)
     set_tests_properties(
         mhd_sweep_mpi_smoke_check
         PROPERTIES DEPENDS mhd_sweep_mpi_smoke_generate
+    )
+
+    # Domain decomposition: a single 32x32 orszag_tang run split over a 2x2
+    # process grid (16x16 per rank), then the usual runner sanity check on the
+    # gathered summaries.  Exercises halos, collective reductions, and gather I/O.
+    add_test(
+        NAME mhd_runner_mpi_smoke_generate
+        COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+                ${MPIEXEC_PREFLAGS}
+                $<TARGET_FILE:mhd_runner_mpi>
+                ${MPIEXEC_POSTFLAGS}
+                --smoke --output-prefix mpidd orszag_tang none mixed_glm
+    )
+
+    add_test(
+        NAME mhd_runner_mpi_smoke_check
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check/check_mhd_runner_sanity.py
+                --prefix mpidd_smoke
+                --methods none mixed_glm
+    )
+
+    set_tests_properties(
+        mhd_runner_mpi_smoke_check
+        PROPERTIES DEPENDS mhd_runner_mpi_smoke_generate
     )
 endif()

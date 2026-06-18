@@ -72,7 +72,11 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Optional MPI support is disabled by default:
+Optional MPI support is disabled by default.  Enabling it builds two
+independent things: the coarse-grained `mhd_sweep_mpi` (one whole-grid case per
+rank) and `mhd_runner_mpi` (a single simulation split across ranks by 2D domain
+decomposition).  Without `ENABLE_MPI` the runner is bit-for-bit the serial /
+OpenMP build:
 
 ```bash
 cmake -S . -B build-mpi -DENABLE_MPI=ON
@@ -422,6 +426,30 @@ Merge them with:
 ```bash
 python3 scripts/run/merge_mpi_sweep_summaries.py
 ```
+
+## Optional MPI Domain Decomposition
+
+`mhd_runner_mpi` splits a **single** simulation across ranks with a 2D Cartesian
+domain decomposition: each rank evolves its own ghost-padded sub-block and
+exchanges halos every substep, CFL/positivity reductions go through
+`MPI_Allreduce`, and rank 0 gathers the sub-blocks for all CSV/snapshot output
+(formats unchanged, so the plotting/check scripts are untouched).  This is the
+layer that makes a single large run faster; it is distinct from the
+coarse-grained sweep above.
+
+```bash
+mpirun -np 4 ./build-mpi/mhd_runner_mpi \
+  --nx 256 --ny 256 --tfinal 0.5 \
+  orszag_tang mixed_glm
+```
+
+The global `nx`/`ny` must be divisible by the process-grid dimensions (chosen by
+`MPI_Dims_create`).  Running with a single rank (`-np 1`) reproduces the serial
+result.  `elliptic_projection` is **not** supported on more than one rank — its
+global Poisson solve is not decomposed — and the runner aborts early with a
+clear message; use `-np 1` or a local cleaning method
+(`hyperbolic_glm`/`mixed_glm`/`parabolic`/`eglm`/`gi_mixed_eglm`).  See
+[`docs/parallelism.md`](docs/parallelism.md) for the full design.
 
 ## Assignment Checklist
 

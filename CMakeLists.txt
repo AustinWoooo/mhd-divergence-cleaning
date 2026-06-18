@@ -8,7 +8,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(OpenMP REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-option(ENABLE_MPI "Build optional coarse-grained MPI sweep runner" OFF)
+option(ENABLE_MPI "Build with MPI: coarse-grained sweep runner + solver domain decomposition" OFF)
+
+# MPI is used in two independent ways when ENABLE_MPI is ON:
+#   1. coarse-grained sweep over independent cases (src/mhd_sweep_mpi.cpp)
+#   2. fine-grained 2D domain decomposition inside the runner
+#      (src/mpi_domain.cpp, gated per-translation-unit by -DENABLE_MPI)
+# Without ENABLE_MPI the runner falls back to the inline no-op stubs in
+# include/mpi_domain.hpp and is bit-for-bit identical to the serial build.
+if(ENABLE_MPI)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+endif()
 
 include_directories(include)
 
@@ -80,6 +90,15 @@ target_link_libraries(glm2d
         OpenMP::OpenMP_CXX
 )
 
+# Domain-decomposition layer.  Compiled into glm2d (the lowest library shared by
+# the cleaning kernels and the runner) so its symbols are available to every
+# dependent target.  ENABLE_MPI is PUBLIC so dependents see the same header view.
+if(ENABLE_MPI)
+    target_sources(glm2d PRIVATE src/mpi_domain.cpp)
+    target_compile_definitions(glm2d PUBLIC ENABLE_MPI)
+    target_link_libraries(glm2d PUBLIC MPI::MPI_CXX)
+endif()
+
 # ============================================================
 # 1D GLM test executable
 # ============================================================
@@ -146,8 +165,6 @@ target_link_libraries(mhd_runner_cli
 )
 
 if(ENABLE_MPI)
-    find_package(MPI REQUIRED COMPONENTS CXX)
-
     add_executable(mhd_sweep_mpi
         src/mhd_sweep_mpi.cpp
     )

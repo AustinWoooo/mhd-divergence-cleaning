@@ -26,114 +26,35 @@ import pandas as pd
 RESULTS = Path("results")
 FIGURES = Path("figures")
 OUT = FIGURES / "report_clean"
+TRADEOFF_OUT = FIGURES / "mhd_runner" / "tradeoff"
+PARETO_OUT = FIGURES / "mhd_runner" / "pareto"
 
-METHOD_ORDER = [
+CURRENT_METHODS = [
     "none",
     "hyperbolic_glm",
-    "mixed_glm",
     "parabolic",
-    "elliptic_projection",
-    "powell_source",
+    "mixed_glm",
     "mixed_eglm",
     "gi_mixed_eglm",
-]
-
-CORE_METHODS = [
-    "none",
-    "hyperbolic_glm",
-    "mixed_glm",
-    "parabolic",
-    "elliptic_projection",
-]
-
-PRESSURE_METHODS = [
-    "none",
-    "hyperbolic_glm",
-    "mixed_glm",
-    "parabolic",
     "elliptic_projection",
     "powell_source",
 ]
 
-GLM_FAMILY_METHODS = [
+OT_PARETO_NO_PROJECTION_NO_POWELL_METHODS = [
     "none",
     "hyperbolic_glm",
-    "mixed_glm",
-    "mixed_eglm",
-    "gi_mixed_eglm",
-]
-
-PERFORMANCE_METHODS = [
-    "none",
-    "hyperbolic_glm",
-    "mixed_glm",
-    "mixed_eglm",
-    "gi_mixed_eglm",
     "parabolic",
-    "elliptic_projection",
-    "powell_source",
-]
-
-SCORECARD_METHODS = [
-    "none",
-    "hyperbolic_glm",
     "mixed_glm",
-    "parabolic",
-    "elliptic_projection",
     "mixed_eglm",
     "gi_mixed_eglm",
 ]
 
-SNAPSHOT_COMPARE_METHODS = [
-    "none",
-    "hyperbolic_glm",
-    "mixed_glm",
-    "parabolic",
-    "elliptic_projection",
-    "mixed_eglm",
-    "gi_mixed_eglm",
-    "powell_source",
-]
-
-SNAPSHOT_COMPARE_METHODS_BY_PROBLEM = {
-    "orszag_tang": [
-        "none",
-        "hyperbolic_glm",
-        "mixed_glm",
-        "parabolic",
-        "elliptic_projection",
-        "mixed_eglm",
-        "gi_mixed_eglm",
-        "powell_source",
-    ],
-    "divergence_advection": [
-        "none",
-        "hyperbolic_glm",
-        "mixed_glm",
-        "parabolic",
-        "elliptic_projection",
-        "mixed_eglm",
-        "gi_mixed_eglm",
-    ],
-    "field_loop": [
-        "none",
-        "hyperbolic_glm",
-        "mixed_glm",
-        "parabolic",
-        "elliptic_projection",
-        "mixed_eglm",
-        "gi_mixed_eglm",
-    ],
-    "blast_wave": [
-        "none",
-        "hyperbolic_glm",
-        "mixed_glm",
-        "parabolic",
-        "elliptic_projection",
-        "mixed_eglm",
-        "gi_mixed_eglm",
-    ],
-}
+METHOD_ORDER = CURRENT_METHODS.copy()
+REPORT_METHODS = CURRENT_METHODS.copy()
+PRESSURE_METHODS = CURRENT_METHODS.copy()
+PERFORMANCE_METHODS = CURRENT_METHODS.copy()
+SCORECARD_METHODS = CURRENT_METHODS.copy()
+SNAPSHOT_COMPARE_METHODS = CURRENT_METHODS.copy()
 
 LABELS = {
     "none": "No cleaning",
@@ -182,6 +103,13 @@ PROBLEM_LABEL = {
     "blast_wave": "Blast wave",
 }
 
+TARGET_FINAL_TIME = {
+    "orszag_tang": 0.5,
+    "field_loop": 0.5,
+    "divergence_advection": 0.5,
+    "blast_wave": 0.2,
+}
+
 PROBLEM_SCORECARD_LABEL = {
     "orszag_tang": "Orszag-Tang",
     "field_loop": "field-loop",
@@ -190,6 +118,8 @@ PROBLEM_SCORECARD_LABEL = {
 
 GENERATED: list[str] = []
 SKIPPED: list[str] = []
+PLOT_METHODS_INCLUDED: dict[str, list[str]] = {}
+WARNED_INPUTS: set[str] = set()
 
 
 def configure_style() -> None:
@@ -228,6 +158,15 @@ def read_csv(path: Path) -> pd.DataFrame | None:
         return None
 
 
+def warn_expected_csv(problem: str, method: str, path: Path, reason: str = "missing CSV") -> None:
+    message = f"warning: {reason} for problem={problem} method={method} path={path}"
+    if message in WARNED_INPUTS:
+        return
+    WARNED_INPUTS.add(message)
+    print(message)
+    SKIPPED.append(f"{problem}/{method}: {reason}: {path}")
+
+
 def save(fig: plt.Figure, stem: str) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     png = OUT / f"{stem}.png"
@@ -241,6 +180,15 @@ def save(fig: plt.Figure, stem: str) -> None:
     GENERATED.append(str(pdf))
 
 
+def save_png(fig: plt.Figure, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not fig.get_constrained_layout():
+        fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    GENERATED.append(str(path))
+
+
 def finite_xy(df: pd.DataFrame, xcol: str, ycol: str, positive_y: bool = False):
     x = pd.to_numeric(df[xcol], errors="coerce")
     y = pd.to_numeric(df[ycol], errors="coerce")
@@ -250,9 +198,19 @@ def finite_xy(df: pd.DataFrame, xcol: str, ycol: str, positive_y: bool = False):
     return x[mask], y[mask]
 
 
-def load_problem_history(problem: str, method: str) -> pd.DataFrame | None:
+def history_csv_path(problem: str, method: str) -> Path:
     prefix = PROBLEM_PREFIX[problem]
-    return read_csv(RESULTS / "mhd_runner" / "divergence" / f"{prefix}_{method}.csv")
+    return RESULTS / "mhd_runner" / "divergence" / f"{prefix}_{method}.csv"
+
+
+def load_problem_history(problem: str, method: str, warn_missing: bool = False) -> pd.DataFrame | None:
+    path = history_csv_path(problem, method)
+    if not path.exists():
+        if warn_missing:
+            warn_expected_csv(problem, method, path)
+            return None
+        return read_csv(path)
+    return read_csv(path)
 
 
 def method_completed(problem: str, method: str) -> bool | None:
@@ -288,19 +246,19 @@ def plot_history_comparison(
     fig, ax = plt.subplots(figsize=(7.6, 4.9))
     plotted = []
     for method in methods:
-        df = load_problem_history(problem, method)
+        df = load_problem_history(problem, method, warn_missing=True)
         if df is None or df.empty or "time" not in df.columns:
+            if df is not None and (df.empty or "time" not in df.columns):
+                warn_expected_csv(problem, method, history_csv_path(problem, method), "invalid or empty history CSV")
             continue
-        if method == "powell_source" and problem == "orszag_tang":
-            completed = method_completed(problem, method)
-            if completed is False:
-                continue
         if derived_energy_drift:
             if "total_energy" not in df.columns:
+                warn_expected_csv(problem, method, history_csv_path(problem, method), "history CSV lacks total_energy")
                 continue
             energy = pd.to_numeric(df["total_energy"], errors="coerce")
             finite = energy[np.isfinite(energy)]
             if finite.empty:
+                warn_expected_csv(problem, method, history_csv_path(problem, method), "history CSV has no finite total_energy")
                 continue
             e0 = float(finite.iloc[0])
             df = df.copy()
@@ -309,9 +267,11 @@ def plot_history_comparison(
         else:
             plot_col = ycol
         if plot_col not in df.columns:
+            warn_expected_csv(problem, method, history_csv_path(problem, method), f"history CSV lacks {plot_col}")
             continue
         x, y = finite_xy(df, "time", plot_col, positive_y=(yscale == "log"))
         if x.empty:
+            warn_expected_csv(problem, method, history_csv_path(problem, method), f"history CSV has no finite {plot_col}")
             continue
         ax.plot(
             x,
@@ -337,6 +297,8 @@ def plot_history_comparison(
         ax.axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
     legend_below(ax, ncol=min(3, len(plotted)))
     save(fig, stem)
+    PLOT_METHODS_INCLUDED[stem] = plotted
+    print(f"{stem}: included methods: {', '.join(plotted)}")
 
 
 def pick_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
@@ -369,8 +331,10 @@ def plot_ot_min_pressure() -> None:
     marked_failure = False
 
     for method in PRESSURE_METHODS:
-        df = load_problem_history("orszag_tang", method)
+        df = load_problem_history("orszag_tang", method, warn_missing=True)
         if df is None or df.empty or "time" not in df.columns:
+            if df is not None and (df.empty or "time" not in df.columns):
+                warn_expected_csv("orszag_tang", method, history_csv_path("orszag_tang", method), "invalid or empty history CSV")
             continue
 
         pcol = pick_existing_column(
@@ -383,6 +347,7 @@ def plot_ot_min_pressure() -> None:
             ],
         )
         if pcol is None:
+            warn_expected_csv("orszag_tang", method, history_csv_path("orszag_tang", method), "history CSV lacks pressure column")
             continue
 
         x, y = finite_xy(df, "time", pcol)
@@ -436,14 +401,16 @@ def plot_ot_min_pressure() -> None:
     ax.grid(True, which="both", alpha=0.3)
     legend_below(ax, ncol=3)
     save(fig, "ot_min_pressure")
+    PLOT_METHODS_INCLUDED["ot_min_pressure"] = plotted
+    print(f"ot_min_pressure: included methods: {', '.join(plotted)}")
 
 
 def plot_figure_1_to_5() -> None:
-    # Figure 1: core OT divergence comparison. Powell variants fail on OT and are
-    # excluded from the main final-value comparison.
+    # Figure 1: report registry comparison. Failed methods still show the
+    # available prefix of their history instead of disappearing from the legend.
     plot_history_comparison(
         "orszag_tang",
-        CORE_METHODS,
+        REPORT_METHODS,
         "L2_norm_fv",
         r"normalized FV $L_2(\nabla\cdot B)$",
         "Orszag-Tang divergence control",
@@ -455,7 +422,7 @@ def plot_figure_1_to_5() -> None:
 
     plot_history_comparison(
         "orszag_tang",
-        CORE_METHODS,
+        REPORT_METHODS,
         "relative_energy_drift",
         "relative total-energy drift",
         "Orszag-Tang energy drift",
@@ -466,7 +433,7 @@ def plot_figure_1_to_5() -> None:
 
     plot_history_comparison(
         "field_loop",
-        GLM_FAMILY_METHODS,
+        REPORT_METHODS,
         "L2_norm_fv",
         r"normalized FV $L_2(\nabla\cdot B)$",
         "Field-loop divergence control",
@@ -474,18 +441,9 @@ def plot_figure_1_to_5() -> None:
         yscale="log",
     )
 
-    da_methods = [
-        "none",
-        "hyperbolic_glm",
-        "mixed_glm",
-        "parabolic",
-        "elliptic_projection",
-        "mixed_eglm",
-        "gi_mixed_eglm",
-    ]
     plot_history_comparison(
         "divergence_advection",
-        da_methods,
+        REPORT_METHODS,
         "L2_norm_fv",
         r"normalized FV $L_2(\nabla\cdot B)$",
         "Divergence-advection cleaning",
@@ -624,6 +582,8 @@ def save_scorecard_figure(df: pd.DataFrame, problem: str, stem: str) -> None:
         fontsize=9,
     )
     save(fig, stem)
+    PLOT_METHODS_INCLUDED[stem] = methods
+    print(f"{stem}: included methods: {', '.join(methods)}")
 
 
 def plot_scorecard() -> None:
@@ -652,7 +612,7 @@ def plot_divergence_energy_tradeoff() -> None:
     if summary is None:
         return
     df = summary[(summary["problem"] == "orszag_tang")].copy()
-    df = df[df["method"].isin(CORE_METHODS)]
+    df = df[df["method"].isin(REPORT_METHODS)]
     if "completed" in df.columns:
         df = df[pd.to_numeric(df["completed"], errors="coerce") == 1].copy()
     for col in ["final_L2_norm_fv", "energy_drift"]:
@@ -712,6 +672,9 @@ def plot_divergence_energy_tradeoff() -> None:
     ax.set_title("Orszag-Tang accuracy-conservation trade-off")
     ax.grid(True, which="both", alpha=0.28)
     save(fig, "divergence_energy_tradeoff")
+    included = [str(method) for method in df["method"]]
+    PLOT_METHODS_INCLUDED["divergence_energy_tradeoff"] = included
+    print(f"divergence_energy_tradeoff: included methods: {', '.join(included)}")
 
 
 def plot_accuracy_cost_pareto() -> None:
@@ -759,6 +722,217 @@ def plot_accuracy_cost_pareto() -> None:
     )
     legend_below(ax, ncol=3)
     save(fig, "accuracy_cost_pareto")
+    included = [str(method) for method in df["method"]]
+    PLOT_METHODS_INCLUDED["accuracy_cost_pareto"] = included
+    print(f"accuracy_cost_pareto: included methods: {', '.join(included)}")
+
+
+def clean_pareto_data(df: pd.DataFrame, methods: list[str]) -> pd.DataFrame:
+    needed = {"total_wall_time_sec", "final_L2_norm_fv", "energy_drift", "method"}
+    if not needed.issubset(df.columns):
+        return df.iloc[0:0].copy()
+    out = df[df["method"].isin(methods)].copy()
+    out["total_wall_time_sec"] = pd.to_numeric(
+        out["total_wall_time_sec"], errors="coerce"
+    )
+    out["final_L2_norm_fv"] = pd.to_numeric(out["final_L2_norm_fv"], errors="coerce")
+    out["energy_drift"] = pd.to_numeric(out["energy_drift"], errors="coerce")
+    out = out[
+        np.isfinite(out["total_wall_time_sec"])
+        & np.isfinite(out["final_L2_norm_fv"])
+        & (out["total_wall_time_sec"] > 0.0)
+        & (out["final_L2_norm_fv"] > 0.0)
+    ].copy()
+    out["_order"] = out["method"].map(lambda m: method_sort_key(str(m))[0])
+    return out.sort_values(["_order", "method"])
+
+
+def plot_accuracy_cost_pareto_variant(
+    df: pd.DataFrame,
+    problem: str,
+    *,
+    include_projection: bool,
+) -> None:
+    methods = CURRENT_METHODS.copy()
+    projection_label = "with Projection"
+    output_suffix = "with_projection"
+    if not include_projection:
+        methods = [method for method in methods if method != "elliptic_projection"]
+        projection_label = "without Projection"
+        output_suffix = "without_projection"
+
+    plot_df = clean_pareto_data(df, methods)
+    stem = f"pareto_{problem}_{output_suffix}"
+    if plot_df.empty:
+        SKIPPED.append(f"{stem}: no finite largest-resolution rows")
+        return
+
+    fig, ax = plt.subplots(figsize=(7.6, 5.3))
+    for _, row in plot_df.iterrows():
+        method = str(row["method"])
+        drift = row.get("energy_drift", np.nan)
+        drift_abs = abs(float(drift)) if np.isfinite(drift) else 0.0
+        size = 70.0 + 900.0 * min(drift_abs, 0.01)
+        ax.scatter(
+            row["total_wall_time_sec"],
+            row["final_L2_norm_fv"],
+            s=size,
+            color=COLORS.get(method),
+            edgecolor="black",
+            linewidth=0.5,
+            alpha=0.9,
+            zorder=3,
+        )
+        ax.scatter(
+            [],
+            [],
+            s=70,
+            color=COLORS.get(method),
+            edgecolor="black",
+            linewidth=0.5,
+            label=LABELS.get(method, method),
+        )
+
+    nx_values = pd.to_numeric(plot_df["nx"], errors="coerce").dropna().astype(int)
+    resolution = int(nx_values.iloc[0]) if not nx_values.empty else -1
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("wall time [s]")
+    ax.set_ylabel(r"final normalized FV $L_2(\nabla\cdot B)$")
+    ax.set_title(f"Accuracy-cost Pareto view -- {problem} ({projection_label})")
+    ax.grid(True, which="both", alpha=0.28)
+    ax.text(
+        0.02,
+        0.02,
+        "largest available N; marker size scales with |energy drift|.",
+        transform=ax.transAxes,
+        fontsize=8.5,
+        va="bottom",
+    )
+    legend_below(ax, ncol=3)
+
+    out = TRADEOFF_OUT / f"{stem}.png"
+    save_png(fig, out)
+    included = [str(method) for method in plot_df["method"]]
+    PLOT_METHODS_INCLUDED[stem] = included
+    print(f"{stem}: selected largest N = {resolution}")
+    print(f"{stem}: included methods: {', '.join(included)}")
+    diagnostic_files = [
+        str(value)
+        for value in plot_df.get("diagnostic_file", pd.Series(dtype=object)).dropna()
+        if str(value)
+    ]
+    if diagnostic_files:
+        print(f"{stem}: diagnostic CSVs used for final divergence:")
+        for path in diagnostic_files:
+            print(f"  {path}")
+
+
+def plot_problem_accuracy_cost_paretos() -> None:
+    df = load_performance_table()
+    if df is None or df.empty:
+        SKIPPED.append("problem accuracy-cost paretos: no compatible performance benchmark")
+        return
+
+    print(
+        "Problem-specific Pareto performance CSV: "
+        + str(RESULTS / "mhd_runner" / "performance" / "performance_scaling_all_methods.csv")
+    )
+    for problem in ["divergence_advection", "field_loop", "orszag_tang"]:
+        problem_df = select_largest_resolution_benchmark(df, problem)
+        if problem_df.empty:
+            SKIPPED.append(f"pareto_{problem}: no largest-resolution rows")
+            continue
+        for include_projection in (True, False):
+            plot_accuracy_cost_pareto_variant(
+                problem_df,
+                problem,
+                include_projection=include_projection,
+            )
+
+
+def plot_ot_pareto_without_projection_and_powell() -> None:
+    df = load_performance_table()
+    stem = "accuracy_cost_pareto_orszag_tang_no_projection_no_powell"
+    if df is None or df.empty:
+        SKIPPED.append(f"{stem}: no compatible performance benchmark")
+        return
+
+    problem = "orszag_tang"
+    problem_df = select_largest_resolution_benchmark(df, problem)
+    plot_df = clean_pareto_data(
+        problem_df,
+        OT_PARETO_NO_PROJECTION_NO_POWELL_METHODS,
+    )
+    if plot_df.empty:
+        SKIPPED.append(f"{stem}: no finite largest-resolution rows")
+        return
+
+    fig, ax = plt.subplots(figsize=(7.6, 5.3))
+    for _, row in plot_df.iterrows():
+        method = str(row["method"])
+        drift = row.get("energy_drift", np.nan)
+        drift_abs = abs(float(drift)) if np.isfinite(drift) else 0.0
+        size = 70.0 + 900.0 * min(drift_abs, 0.01)
+        ax.scatter(
+            row["total_wall_time_sec"],
+            row["final_L2_norm_fv"],
+            s=size,
+            color=COLORS.get(method),
+            edgecolor="black",
+            linewidth=0.5,
+            alpha=0.9,
+            zorder=3,
+        )
+        ax.scatter(
+            [],
+            [],
+            s=70,
+            color=COLORS.get(method),
+            edgecolor="black",
+            linewidth=0.5,
+            label=LABELS.get(method, method),
+        )
+
+    nx_values = pd.to_numeric(plot_df["nx"], errors="coerce").dropna().astype(int)
+    resolution = int(nx_values.iloc[0]) if not nx_values.empty else -1
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("wall time [s]")
+    ax.set_ylabel(r"final normalized FV $L_2(\nabla\cdot B)$")
+    ax.set_title("Accuracy-cost Pareto view -- orszag_tang (without Projection and Powell)")
+    ax.grid(True, which="both", alpha=0.28)
+    ax.text(
+        0.02,
+        0.02,
+        "largest available N; marker size scales with |energy drift|.",
+        transform=ax.transAxes,
+        fontsize=8.5,
+        va="bottom",
+    )
+    legend_below(ax, ncol=3)
+
+    out = PARETO_OUT / f"{stem}.png"
+    save_png(fig, out)
+
+    included = [str(method) for method in plot_df["method"]]
+    PLOT_METHODS_INCLUDED[stem] = included
+    print(
+        f"{stem}: performance CSV used: "
+        f"{RESULTS / 'mhd_runner' / 'performance' / 'performance_scaling_all_methods.csv'}"
+    )
+    print(f"{stem}: selected problem = {problem}")
+    print(f"{stem}: selected largest N = {resolution}")
+    print(f"{stem}: included methods: {', '.join(included)}")
+    diagnostic_files = [
+        str(value)
+        for value in plot_df.get("diagnostic_file", pd.Series(dtype=object)).dropna()
+        if str(value)
+    ]
+    if diagnostic_files:
+        print(f"{stem}: diagnostic CSVs used for final divergence:")
+        for path in diagnostic_files:
+            print(f"  {path}")
 
 
 def plot_robustness_heatmap() -> None:
@@ -804,11 +978,113 @@ def plot_robustness_heatmap() -> None:
     cbar = fig.colorbar(im, ax=ax, shrink=0.8, ticks=[-1, 0, 1])
     cbar.ax.set_yticklabels(["N/A / no data", "failed", "completed"])
     save(fig, "robustness_problem_method")
+    PLOT_METHODS_INCLUDED["robustness_problem_method"] = methods
+    print(f"robustness_problem_method: included methods: {', '.join(methods)}")
+
+
+def snapshot_csv_path(stem: str) -> Path:
+    return RESULTS / "mhd_runner" / "snapshots" / f"{stem}_final.csv"
 
 
 def load_snapshot(stem: str) -> pd.DataFrame | None:
-    path = RESULTS / "mhd_runner" / "snapshots" / f"{stem}_final.csv"
+    path = snapshot_csv_path(stem)
     return read_csv(path)
+
+
+def as_summary_float(summary: pd.Series | None, key: str) -> float:
+    if summary is None:
+        return float("nan")
+    value = pd.to_numeric(pd.Series([summary.get(key)]), errors="coerce").iloc[0]
+    return float(value) if np.isfinite(value) else float("nan")
+
+
+def summary_bool(summary: pd.Series | None, key: str) -> bool | None:
+    value = as_summary_float(summary, key)
+    if not np.isfinite(value):
+        return None
+    return bool(int(round(value)))
+
+
+def last_history_time(problem: str, method: str) -> float:
+    path = history_csv_path(problem, method)
+    if not path.exists():
+        return float("nan")
+    try:
+        df = pd.read_csv(path, usecols=["time"])
+    except Exception:
+        return float("nan")
+    if df.empty:
+        return float("nan")
+    values = pd.to_numeric(df["time"], errors="coerce")
+    finite = values[np.isfinite(values)]
+    return float(finite.iloc[-1]) if not finite.empty else float("nan")
+
+
+def format_time(value: float) -> str:
+    if not np.isfinite(value):
+        return "unknown"
+    return f"{value:.4g}"
+
+
+def snapshot_run_state(problem: str, method: str) -> dict[str, object]:
+    summary = load_run_summary(problem, method)
+    status = str(summary.get("status", "unknown")).strip().lower() if summary is not None else "unknown"
+    final_time_reached = summary_bool(summary, "final_time_reached")
+    failure_time = as_summary_float(summary, "failure_time")
+    history_time = last_history_time(problem, method)
+    stop_time = failure_time if np.isfinite(failure_time) else history_time
+    snapshot_write_time = as_summary_float(summary, "snapshot_write_time_sec")
+    performance_mode = summary_bool(summary, "performance_mode")
+    target_time = TARGET_FINAL_TIME.get(problem, float("nan"))
+    success = status == "finished" and final_time_reached is True
+    reason = str(summary.get("failure_reason", "")).strip() if summary is not None else ""
+    return {
+        "summary": summary,
+        "status": status,
+        "success": success,
+        "final_time_reached": final_time_reached,
+        "failure_time": failure_time,
+        "history_time": history_time,
+        "stop_time": stop_time,
+        "snapshot_write_time": snapshot_write_time,
+        "performance_mode": performance_mode,
+        "target_time": target_time,
+        "reason": reason,
+    }
+
+
+def load_final_snapshot_for_plot(problem: str, method: str) -> tuple[pd.DataFrame | None, str | None, dict[str, object]]:
+    prefix = PROBLEM_PREFIX[problem]
+    stem = f"{prefix}_{method}"
+    path = snapshot_csv_path(stem)
+    state = snapshot_run_state(problem, method)
+
+    if not bool(state["success"]):
+        stop_time = state["stop_time"]
+        placeholder = f"FAILED\nt={format_time(float(stop_time))}"
+        if path.exists():
+            SKIPPED.append(
+                f"snapshot {problem}/{method}: existing {path} ignored because "
+                f"status={state['status']} final_time_reached={state['final_time_reached']}"
+            )
+        return None, placeholder, state
+
+    if not path.exists():
+        if state["performance_mode"] is True or (
+            np.isfinite(float(state["snapshot_write_time"]))
+            and float(state["snapshot_write_time"]) <= 0.0
+        ):
+            reason = "missing snapshot CSV; generation workflow did not request snapshots"
+        else:
+            reason = "missing snapshot CSV for successful final-time run"
+        warn_expected_csv(problem, method, path, reason)
+        return None, "N/A", state
+
+    df = load_snapshot(stem)
+    if df is None or df.empty:
+        warn_expected_csv(problem, method, path, "invalid or empty snapshot CSV")
+        return None, "N/A", state
+    return add_snapshot_derived(df), None, state
 
 
 def snapshot_grid(df: pd.DataFrame, field: str):
@@ -883,17 +1159,35 @@ def plot_snapshot_comparison(
     output_stem: str | None = None,
 ) -> None:
     prefix = PROBLEM_PREFIX[problem]
-    methods = methods or SNAPSHOT_COMPARE_METHODS_BY_PROBLEM.get(problem, SNAPSHOT_COMPARE_METHODS)
+    methods = methods or SNAPSHOT_COMPARE_METHODS
     output_stem = output_stem or f"snapshot_compare_{problem}"
-    loaded: list[tuple[str, pd.DataFrame | None]] = []
+    loaded: list[dict[str, object]] = []
     missing: list[str] = []
+    failed: list[str] = []
     for method in methods:
-        df = load_snapshot(f"{prefix}_{method}")
+        df, placeholder, state = load_final_snapshot_for_plot(problem, method)
         if df is None:
-            loaded.append((method, None))
-            missing.append(method)
+            loaded.append(
+                {
+                    "method": method,
+                    "df": None,
+                    "placeholder": placeholder or "N/A",
+                    "state": state,
+                }
+            )
+            if placeholder and placeholder.startswith("FAILED"):
+                failed.append(method)
+            else:
+                missing.append(method)
         else:
-            loaded.append((method, add_snapshot_derived(df)))
+            loaded.append(
+                {
+                    "method": method,
+                    "df": df,
+                    "placeholder": None,
+                    "state": state,
+                }
+            )
     rows = [
         ("rho", r"density $\rho$", "viridis", "linear"),
         ("p", r"pressure $p$", "plasma", "linear"),
@@ -919,7 +1213,8 @@ def plot_snapshot_comparison(
     for r, (field, label, cmap, scale) in enumerate(rows):
         grids = []
         valid_positions = []
-        for c, (_, df) in enumerate(loaded):
+        for c, item in enumerate(loaded):
+            df = item["df"]
             if df is None:
                 continue
             grid = snapshot_grid(df, field)
@@ -930,8 +1225,10 @@ def plot_snapshot_comparison(
         values = np.concatenate([z[np.isfinite(z)].ravel() for _, _, z in grids]) if grids else np.array([])
         values = values[np.isfinite(values)]
         if values.size == 0:
-            for c, (method, _) in enumerate(loaded):
-                annotate_missing_panel(axes[r, c], "N/A")
+            for c, item in enumerate(loaded):
+                method = str(item["method"])
+                placeholder = str(item.get("placeholder") or "N/A")
+                annotate_missing_panel(axes[r, c], placeholder)
                 if r == 0:
                     axes[r, c].set_title(LABELS[method], fontsize=17)
                 if c == 0:
@@ -961,10 +1258,12 @@ def plot_snapshot_comparison(
             min(float(np.nanmin(y)) for _, y, _ in grids),
             max(float(np.nanmax(y)) for _, y, _ in grids),
         )
-        for c, (method, _) in enumerate(loaded):
+        for c, item in enumerate(loaded):
+            method = str(item["method"])
             ax = axes[r, c]
             if c not in grid_by_position:
-                annotate_missing_panel(ax, "N/A", xlim=xlim, ylim=ylim)
+                placeholder = str(loaded[c].get("placeholder") or "N/A")
+                annotate_missing_panel(ax, placeholder, xlim=xlim, ylim=ylim)
                 if r == 0:
                     ax.set_title(LABELS[method], fontsize=17)
                 if c == 0:
@@ -998,7 +1297,16 @@ def plot_snapshot_comparison(
     if missing:
         labels = ", ".join(LABELS[m] for m in missing)
         SKIPPED.append(f"{output_stem}: missing snapshots for {labels}")
+    if failed:
+        labels = ", ".join(
+            f"{LABELS[m]} at t={format_time(float(snapshot_run_state(problem, m)['stop_time']))}"
+            for m in failed
+        )
+        SKIPPED.append(f"{output_stem}: failed/early snapshots shown as placeholders for {labels}")
     save(fig, output_stem)
+    included = [str(item["method"]) for item in loaded if item["df"] is not None]
+    PLOT_METHODS_INCLUDED[output_stem] = included
+    print(f"{output_stem}: included methods: {', '.join(included)}")
 
 
 def plot_snapshot_comparisons() -> None:
@@ -1081,6 +1389,14 @@ def write_run_summary() -> None:
     for item in GENERATED:
         lines.append(f"- {item}")
     lines.append("")
+    lines.append("## Methods Included")
+    if PLOT_METHODS_INCLUDED:
+        for stem, methods in sorted(PLOT_METHODS_INCLUDED.items()):
+            labels = ", ".join(methods)
+            lines.append(f"- {stem}: {labels}")
+    else:
+        lines.append("- none")
+    lines.append("")
     lines.append("## Skipped / Notes")
     if SKIPPED:
         for item in SKIPPED:
@@ -1097,6 +1413,8 @@ def main() -> None:
     plot_scorecard()
     plot_divergence_energy_tradeoff()
     plot_accuracy_cost_pareto()
+    plot_problem_accuracy_cost_paretos()
+    plot_ot_pareto_without_projection_and_powell()
     plot_robustness_heatmap()
     plot_snapshot_comparisons()
     plot_ot_snapshot_panel()

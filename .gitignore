@@ -71,3 +71,12 @@ results/mhd_runner/snapshots/mhd_da_elliptic_projection_final.csv
 results/mhd_runner/snapshots/mhd_fl_hyperbolic_glm_final.csv
 results/mhd_runner/snapshots/mhd_fl_mixed_eglm_final.csv
 results/mhd_runner/snapshots/mhd_fl_gi_mixed_eglm_final.csv
+
+# Raw benchmarking/sweep inventories and per-run diagnostics. Curated aggregate
+# CSVs, figures, and selected summary outputs remain eligible for tracking.
+figures/visual_inventory/
+results/openmp_scaling_runs/
+results/mhd_runner/glm_sweep/ot_runs/
+results/mhd_runner/projection_acausality/projection_diagnostics/*_step*_sub*.csv
+results/mhd_runner/failures/perf_*_failure.csv
+results/mhd_runner/failures/perf_*_first_bad_cell_diagnostic.csv

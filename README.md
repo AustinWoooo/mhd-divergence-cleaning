@@ -370,6 +370,99 @@ The basic `powell_source` method is useful as a non-conservative source-term
 comparison, but it is not forced into the main report scaling plot unless it
 remains stable for the selected problem and resolution range.
 
+## Parallel Strong Scaling (OpenMP and MPI)
+
+The section above measures *serial* wall-clock versus number of cells.  The two
+benchmarks here instead measure **strong scaling**: a fixed-size problem is run
+on an increasing amount of parallelism, and the speedup over the single-worker
+baseline is reported.  Both scripts repeat each run (`--repeats`, median by
+default), take `solver_time = hydro_time_sec + cleaning_time_sec` from the runner
+summary, and check correctness by comparing each run's final divergence residual
+(`final_L2_fv`) against the single-worker baseline at the same grid size.  Each
+emits an aggregated CSV, a raw per-repeat CSV, four figures (runtime, speedup
+with an ideal-linear reference, parallel efficiency, time-per-iteration), and a
+short Markdown report.
+
+Both benchmarks use `divergence_advection` with `--method none` as the default
+reference workload, so the reported speedup is for the pure ideal-MHD hydro
+update (RK2 HLLD/LLF) with **no divergence cleaning**.  The speedup baseline is
+the single-worker run of that same problem and method at each grid size.  Change
+the workload with `--problem` and `--method`; picking a cleaning method also
+exercises the cleaning step, which (under MPI) adds communication — see the MPI
+note below.
+
+### OpenMP (shared memory)
+
+Varies `OMP_NUM_THREADS` on a single `mhd_runner_cli` process (the default
+`build/` build already links OpenMP):
+
+```bash
+python3 scripts/benchmark_openmp_scaling.py \
+  --sizes 128 256 512 --threads 1 2 4 8 --repeats 3 \
+  --problem divergence_advection --method none
+```
+
+Outputs:
+
+```text
+results/openmp_scaling.csv          # aggregated (per size x threads)
+results/openmp_scaling_raw.csv      # per-repeat
+results/openmp_scaling_report.md
+figures/openmp_scaling/openmp_{runtime,speedup,efficiency,time_per_iteration}_vs_threads.{png,pdf}
+```
+
+Thread counts above the available CPUs are skipped automatically.
+
+### MPI (distributed memory, domain decomposition)
+
+Varies the number of MPI ranks: the same simulation is split across a 2D
+Cartesian domain decomposition via `mhd_runner_mpi`.  This requires the MPI
+build, which the script configures on first use into a separate `build-mpi/`
+directory (`-DENABLE_MPI=ON`).  Each rank runs with `OMP_NUM_THREADS=1` by
+default so the measurement is pure MPI:
+
+```bash
+python3 scripts/benchmark_mpi_scaling.py \
+  --sizes 256 512 1024 --ranks 1 2 4 8 --repeats 3 \
+  --problem divergence_advection --method none
+```
+
+Outputs:
+
+```text
+results/mpi_scaling.csv             # aggregated (per size x ranks)
+results/mpi_scaling_raw.csv         # per-repeat
+results/mpi_scaling_report.md
+figures/mpi_scaling/mpi_{runtime,speedup,efficiency,time_per_iteration}_vs_ranks.{png,pdf}
+```
+
+Because `solver_time` includes the per-substep halo exchanges, the MPI numbers
+account for communication as well as compute.  The global `nx`/`ny` must be
+divisible by the process-grid dimensions `MPI_Dims_create` chooses for a given
+rank count (powers of two are safe); incompatible size/rank combinations are
+skipped with a warning.  Use `--oversubscribe` to run more ranks than physical
+cores (for functional testing; it distorts timing), `--threads-per-rank N` for a
+hybrid MPI+OpenMP measurement, and `--mpirun` / `--mpirun-extra` to choose the
+launcher or pass binding flags.  Strong-scaling benefit is clearest on large
+grids (512² and up); small grids are communication-bound and scale sub-linearly.
+
+Because the default `--method none` measures only the hydro update, its scaling
+does **not** include any divergence-cleaning communication.  Selecting a cleaning
+method adds that cost: the GLM / EGLM / parabolic / Powell methods do one extra
+halo exchange per cleaning substep, while `elliptic_projection` solves a global
+Poisson equation every step with a matrix-free distributed conjugate gradient
+(scalar halo exchanges plus a collective `MPI_Allreduce` for the dot products and
+convergence norm on every CG iteration).  The projection's communication pattern
+is therefore heavier and typically scales worse than the hydro-only or
+hyperbolic-cleaning methods.  To benchmark cleaning-inclusive scaling, pass e.g.
+`--problem orszag_tang --method mixed_glm` or `--method elliptic_projection`.
+
+The validated reference run on this machine (`divergence_advection`, `none`,
+medians of 3 repeats, ranks 1/2/4/8) gave speedups of 1.00 / 1.86 / 3.61 / 4.04
+at 256² (parallel efficiency 1.00 / 0.93 / 0.90 / 0.51), with larger grids
+scaling better, and the final divergence residual bit-identical to the
+single-rank baseline at every rank count.
+
 ## Python Figure Workflow
 
 Standard science figures:

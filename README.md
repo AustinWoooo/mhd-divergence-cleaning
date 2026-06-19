@@ -463,6 +463,40 @@ at 256² (parallel efficiency 1.00 / 0.93 / 0.90 / 0.51), with larger grids
 scaling better, and the final divergence residual bit-identical to the
 single-rank baseline at every rank count.
 
+### Unified OpenMP + MPI + Hybrid Workflow
+
+For method-separated strong-scaling runs across shared-memory, pure-MPI, and
+hybrid MPI+OpenMP, use the unified benchmark driver:
+
+```bash
+python3 scripts/benchmark_parallel_scaling.py --smoke
+```
+
+By default it benchmarks `divergence_advection` for the required methods
+`none`, `mixed_glm`, and `elliptic_projection`, builds the needed executables,
+runs each case with `--performance-mode --no-snapshots`, and writes:
+
+- per-run summaries under `results/performance/runs/`
+- aggregate CSV: `results/performance/openmp_mpi_scaling.csv`
+- report markdown: `results/performance/openmp_mpi_scaling_report.md`
+- figures: `figures/performance/*.png`
+
+Example full run:
+
+```bash
+python3 scripts/benchmark_parallel_scaling.py \
+  --openmp --mpi --hybrid \
+  --methods none mixed_glm elliptic_projection \
+  --sizes 128 256 \
+  --openmp-threads 1 2 4 8 \
+  --mpi-ranks 1 2 4 8 \
+  --hybrid-configs 1x8 2x4 4x2 8x1 \
+  --repeats 3
+```
+
+The unified workflow keeps raw per-run artifacts out of Git by default; only
+the aggregate CSV and curated figures are intended for optional tracking.
+
 ## Python Figure Workflow
 
 Standard science figures:

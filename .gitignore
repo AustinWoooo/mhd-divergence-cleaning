@@ -75,6 +75,9 @@ results/mhd_runner/snapshots/mhd_fl_gi_mixed_eglm_final.csv
 # Raw benchmarking/sweep inventories and per-run diagnostics. Curated aggregate
 # CSVs, figures, and selected summary outputs remain eligible for tracking.
 figures/visual_inventory/
+results/performance/runs/
+results/performance/*_raw.csv
+results/performance/*.log
 results/openmp_scaling_runs/
 results/mhd_runner/glm_sweep/ot_runs/
 results/mhd_runner/projection_acausality/projection_diagnostics/*_step*_sub*.csv

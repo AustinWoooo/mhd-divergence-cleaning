@@ -1,0 +1,4 @@
+problem,method,nx,ny,ncell,tfinal,ranks,repeat,solver_time_sec,total_wall_time_sec,hydro_time_sec,cleaning_time_sec,iteration_count,time_per_iteration_sec,final_residual_L2_fv,final_residual_Linf_fv,energy_drift,status,summary_file
+divergence_advection,none,64,64,4096,0.01,1,1,0.060372131,0.0818661,0.0603677,4.431e-06,4,0.01509303275,0.0699967,0.501015,-3.38148e-16,finished,results/mpi_scaling_runs/summaries/mpi_divergence_advection_none_n64_p1_r1_none_summary.csv
+divergence_advection,none,64,64,4096,0.01,2,1,0.037275461,0.0531461,0.0372726,2.861e-06,4,0.00931886525,0.0699967,0.501015,-3.38148e-16,finished,results/mpi_scaling_runs/summaries/mpi_divergence_advection_none_n64_p2_r1_none_summary.csv
+divergence_advection,none,64,64,4096,0.01,4,1,0.02220921,0.0345646,0.0222067,2.51e-06,4,0.0055523025,0.0699967,0.501015,-3.38148e-16,finished,results/mpi_scaling_runs/summaries/mpi_divergence_advection_none_n64_p4_r1_none_summary.csv

@@ -1439,8 +1439,6 @@ def main() -> None:
     groups = group_result_files()
     write_data_inventory(groups)
 
-    plot_glm_histories()
-
     mhd_divergence = sorted((RESULTS / "mhd_runner" / "divergence").glob("*.csv"))
     plot_time_series_collection(mhd_divergence, "mhd_runner_divergence", "mhd_runner_divergence", "multiple")
 

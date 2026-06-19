@@ -1,0 +1,3 @@
+step,time,dt,L1_fv,L2_fv,Linf_fv,L1_norm_fv,L2_norm_fv,Linf_norm_fv,total_mass,total_momentum_x,total_momentum_y,total_momentum_z,total_energy,min_density,min_pressure,has_nonfinite,has_negative_density,has_negative_pressure,cleaning_subcycles_step,projection_iterations_step,projection_solver_update_residual,projection_final_residual,projection_true_residual,projection_converged
+0,0,0.001,0.0198581,0.0700184,0.501149,0.000304932,0.00107025,0.00758195,1,1,0.5,0,2.6266,1,1,0,0,0,0,0,,,,1
+8,0.02,0.000924628,0.0198593,0.0699716,0.500581,0.00030506,0.00107017,0.00758031,1,1,0.5,0,2.6266,0.998175,0.991264,0,0,0,0,0,,,,1

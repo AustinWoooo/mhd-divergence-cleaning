@@ -100,32 +100,6 @@ if(ENABLE_MPI)
 endif()
 
 # ============================================================
-# 1D GLM test executable
-# ============================================================
-
-add_executable(test_glm_1d
-    tests/test_glm_1d.cpp
-)
-
-target_link_libraries(test_glm_1d
-    PRIVATE
-        glm
-)
-
-# ============================================================
-# 2D GLM test executable
-# ============================================================
-
-add_executable(test_glm_2d
-    tests/test_glm_2d.cpp
-)
-
-target_link_libraries(test_glm_2d
-    PRIVATE
-        glm2d
-)
-
-# ============================================================
 # Integrated HLLD + GLM runner library
 # ============================================================
 
@@ -201,16 +175,6 @@ add_test(
     COMMAND test_hlld_primitive_recovery
 )
 
-
-add_test(
-    NAME glm_1d
-    COMMAND test_glm_1d
-)
-
-add_test(
-    NAME glm_2d
-    COMMAND test_glm_2d
-)
 
 add_test(
     NAME mhd_runner

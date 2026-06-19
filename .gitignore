@@ -76,6 +76,7 @@ results/mhd_runner/snapshots/mhd_fl_gi_mixed_eglm_final.csv
 # CSVs, figures, and selected summary outputs remain eligible for tracking.
 figures/visual_inventory/
 results/performance/runs/
+results/performance/runs_*/
 results/performance/*_raw.csv
 results/performance/*.log
 results/openmp_scaling_runs/

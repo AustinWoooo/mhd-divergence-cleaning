@@ -247,14 +247,19 @@ def read_summary(path: Path) -> dict[str, str]:
     return rows[-1]
 
 
-def write_csv(path: Path, fields: list[str], rows: list[dict[str, object]]) -> None:
+def write_csv(path, fields, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=fields,
+            extrasaction="ignore",
+            quoting=csv.QUOTE_MINIMAL,
+            escapechar="\\",
+        )
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in fields})
-
 
 def display_path(path: Path) -> str:
     try:

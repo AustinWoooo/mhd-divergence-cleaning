@@ -36,6 +36,30 @@ double raw_pressure(const State& cell, double gamma) {
     return (gamma - 1.0) * (cell[E] - kinetic - magnetic);
 }
 
+double raw_internal_energy(const State& cell) {
+    const double rho = cell[RHO];
+    const double ux = cell[MX] / rho;
+    const double uy = cell[MY] / rho;
+    const double uz = cell[MZ] / rho;
+    const double kinetic =
+        0.5 * rho * (ux * ux + uy * uy + uz * uz);
+    const double magnetic =
+        0.5 * (
+            cell[BX] * cell[BX]
+          + cell[BY] * cell[BY]
+          + cell[BZ] * cell[BZ]
+        );
+    return cell[E] - kinetic - magnetic;
+}
+
+double magnetic_energy(const State& cell) {
+    return 0.5 * (
+        cell[BX] * cell[BX]
+      + cell[BY] * cell[BY]
+      + cell[BZ] * cell[BZ]
+    );
+}
+
 void set_total_energy_from_pressure(State& cell, double pressure, double gamma) {
     const double rho = cell[RHO];
     const double ux = cell[MX] / rho;
@@ -391,6 +415,210 @@ void test_projection_moderate_case_keeps_pressure_positive() {
     std::cout << "Projection pressure assertion passed.\n";
 }
 
+void test_projection_preserve_thermal_pressure_repairs_energy() {
+    constexpr double gamma = 5.0 / 3.0;
+    GLM2DParams params;
+    params.nx = 16;
+    params.ny = 16;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+    params.poisson_max_iter = 50000;
+    params.poisson_tol = 1.0e-12;
+    params.poisson_omega = 1.7;
+    params.energy_policy = CleaningEnergyPolicy::PreserveThermalPressure;
+
+    std::vector<State> U(params.nx * params.ny);
+    fill_divergent_test_state(U, params.nx, params.ny);
+    for (State& cell : U) {
+        cell[RHO] = 1.0;
+        cell[MX] = 0.05;
+        cell[MY] = -0.02;
+        cell[MZ] = 0.03;
+        set_total_energy_from_pressure(cell, 0.9, gamma);
+    }
+
+    const std::vector<State> U_before = U;
+    apply_elliptic_projection_2d(U, params);
+
+    bool changed_B = false;
+    for (std::size_t id = 0; id < U.size(); ++id) {
+        const double internal_before = raw_internal_energy(U_before[id]);
+        const double internal_after = raw_internal_energy(U[id]);
+        const double pressure_before = raw_pressure(U_before[id], gamma);
+        const double pressure_after = raw_pressure(U[id], gamma);
+        const double magnetic_before =
+            0.5 * (
+                U_before[id][BX] * U_before[id][BX]
+              + U_before[id][BY] * U_before[id][BY]
+              + U_before[id][BZ] * U_before[id][BZ]
+            );
+        const double magnetic_after =
+            0.5 * (
+                U[id][BX] * U[id][BX]
+              + U[id][BY] * U[id][BY]
+              + U[id][BZ] * U[id][BZ]
+            );
+
+        assert(approx_equal(internal_after, internal_before, 1.0e-11));
+        assert(approx_equal(pressure_after, pressure_before, 1.0e-11));
+        assert(approx_equal(
+            U[id][E] - U_before[id][E],
+            magnetic_after - magnetic_before,
+            1.0e-11
+        ));
+
+        changed_B = changed_B
+            || !approx_equal(U[id][BX], U_before[id][BX], 1.0e-13)
+            || !approx_equal(U[id][BY], U_before[id][BY], 1.0e-13);
+    }
+
+    assert(changed_B);
+    std::cout << "Projection energy-repair assertion passed.\n";
+}
+
+void test_projection_low_pressure_preserve_thermal_stays_positive() {
+    constexpr double gamma = 5.0 / 3.0;
+    constexpr double pressure0 = 1.0e-12;
+
+    GLM2DParams params;
+    params.nx = 16;
+    params.ny = 16;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+    params.poisson_max_iter = 50000;
+    params.poisson_tol = 1.0e-12;
+    params.poisson_omega = 1.7;
+    params.energy_policy = CleaningEnergyPolicy::PreserveThermalPressure;
+
+    std::vector<State> U(params.nx * params.ny);
+    fill_divergent_test_state(U, params.nx, params.ny);
+    for (State& cell : U) {
+        cell[RHO] = 1.0;
+        cell[MX] = 0.02;
+        cell[MY] = -0.01;
+        cell[MZ] = 0.01;
+        cell[BX] += 4.0;
+        cell[BY] -= 2.0;
+        cell[BZ] += 1.0;
+        set_total_energy_from_pressure(cell, pressure0, gamma);
+    }
+
+    const std::vector<State> U_before = U;
+    apply_elliptic_projection_2d(U, params);
+
+    for (std::size_t id = 0; id < U.size(); ++id) {
+        const double pressure_before = raw_pressure(U_before[id], gamma);
+        const double pressure_after = raw_pressure(U[id], gamma);
+        assert(pressure_before > 0.0);
+        assert(pressure_after > 0.0);
+        assert(approx_equal(pressure_after, pressure_before, 1.0e-12));
+    }
+
+    std::cout << "Projection low-pressure preserve assertion passed.\n";
+}
+
+void test_parabolic_preserve_thermal_pressure_repairs_energy() {
+    constexpr double gamma = 5.0 / 3.0;
+    GLM2DParams params;
+    params.nx = 16;
+    params.ny = 16;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+    params.dt = 5.0e-4;
+    params.cp = 0.2;
+    params.energy_policy = CleaningEnergyPolicy::PreserveThermalPressure;
+
+    std::vector<State> U(params.nx * params.ny);
+    fill_divergent_test_state(U, params.nx, params.ny);
+    for (State& cell : U) {
+        cell[RHO] = 1.0;
+        cell[MX] = 0.04;
+        cell[MY] = -0.01;
+        cell[MZ] = 0.02;
+        set_total_energy_from_pressure(cell, 0.8, gamma);
+    }
+
+    const std::vector<State> U_before = U;
+    apply_parabolic_cleaning_2d(U, params);
+    preserve_thermal_pressure_after_magnetic_update(U, U_before);
+
+    bool changed_B = false;
+    for (std::size_t id = 0; id < U.size(); ++id) {
+        const double internal_before = raw_internal_energy(U_before[id]);
+        const double internal_after = raw_internal_energy(U[id]);
+        const double pressure_before = raw_pressure(U_before[id], gamma);
+        const double pressure_after = raw_pressure(U[id], gamma);
+        const double magnetic_before =
+            0.5 * (
+                U_before[id][BX] * U_before[id][BX]
+              + U_before[id][BY] * U_before[id][BY]
+              + U_before[id][BZ] * U_before[id][BZ]
+            );
+        const double magnetic_after =
+            0.5 * (
+                U[id][BX] * U[id][BX]
+              + U[id][BY] * U[id][BY]
+              + U[id][BZ] * U[id][BZ]
+            );
+
+        assert(approx_equal(internal_after, internal_before, 1.0e-11));
+        assert(approx_equal(pressure_after, pressure_before, 1.0e-11));
+        assert(approx_equal(
+            U[id][E] - U_before[id][E],
+            magnetic_after - magnetic_before,
+            1.0e-11
+        ));
+
+        changed_B = changed_B
+            || !approx_equal(U[id][BX], U_before[id][BX], 1.0e-13)
+            || !approx_equal(U[id][BY], U_before[id][BY], 1.0e-13);
+    }
+
+    assert(changed_B);
+    std::cout << "Parabolic energy-repair assertion passed.\n";
+}
+
+void test_parabolic_low_pressure_preserve_thermal_stays_positive() {
+    constexpr double gamma = 5.0 / 3.0;
+    constexpr double pressure0 = 1.0e-12;
+
+    GLM2DParams params;
+    params.nx = 16;
+    params.ny = 16;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+    params.dt = 5.0e-4;
+    params.cp = 0.2;
+    params.energy_policy = CleaningEnergyPolicy::PreserveThermalPressure;
+
+    std::vector<State> U(params.nx * params.ny);
+    fill_divergent_test_state(U, params.nx, params.ny);
+    for (State& cell : U) {
+        cell[RHO] = 1.0;
+        cell[MX] = 0.02;
+        cell[MY] = -0.01;
+        cell[MZ] = 0.01;
+        cell[BX] += 4.0;
+        cell[BY] -= 2.0;
+        cell[BZ] += 1.0;
+        set_total_energy_from_pressure(cell, pressure0, gamma);
+    }
+
+    const std::vector<State> U_before = U;
+    apply_parabolic_cleaning_2d(U, params);
+    preserve_thermal_pressure_after_magnetic_update(U, U_before);
+
+    for (std::size_t id = 0; id < U.size(); ++id) {
+        const double pressure_before = raw_pressure(U_before[id], gamma);
+        const double pressure_after = raw_pressure(U[id], gamma);
+        assert(pressure_before > 0.0);
+        assert(pressure_after > 0.0);
+        assert(approx_equal(pressure_after, pressure_before, 1.0e-12));
+    }
+
+    std::cout << "Parabolic low-pressure preserve assertion passed.\n";
+}
+
 void test_parabolic_reduces_fv_divB() {
     GLM2DParams params;
     params.nx = 16;
@@ -732,8 +960,12 @@ int main() {
     test_projection_reduces_fv_divB();
     test_projection_preserves_uniform_field();
     test_projection_moderate_case_keeps_pressure_positive();
+    test_projection_preserve_thermal_pressure_repairs_energy();
+    test_projection_low_pressure_preserve_thermal_stays_positive();
     test_parabolic_reduces_fv_divB();
     test_parabolic_moderate_case_keeps_pressure_positive();
+    test_parabolic_preserve_thermal_pressure_repairs_energy();
+    test_parabolic_low_pressure_preserve_thermal_stays_positive();
     test_powell_advects_bump_with_uniform_velocity();
     test_mixed_glm_damping_factor();
     test_pure_glm_cleaning_reduces_sinusoidal_divergence();

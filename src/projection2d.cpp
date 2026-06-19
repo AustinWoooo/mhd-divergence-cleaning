@@ -468,11 +468,22 @@ ProjectionResult apply_elliptic_projection_2d(
     const GLM2DParams& params,
     const MPIDomain* domain
 ) {
+    const bool preserve_thermal =
+        params.energy_policy == CleaningEnergyPolicy::PreserveThermalPressure;
+    std::vector<State> U_before;
+    if (preserve_thermal) {
+        U_before = U;
+    }
+
     std::vector<double> phi;
     const ProjectionResult info =
         solve_projection_phi_2d(U, params, phi, domain);
 
     apply_projection_B_correction_2d(U, phi, params, 1.0, domain);
+
+    if (preserve_thermal) {
+        preserve_thermal_pressure_after_magnetic_update(U, U_before);
+    }
 
     // Full projection: theta = 1.
     ProjectionResult result = info;

@@ -165,12 +165,13 @@ mpirun -np 4 ./build-mpi/mhd_runner_mpi \
 
 `nx_g/ny_g` 必須能被 `MPI_Dims_create` 選出的程序格維度整除;`-np 1` 等同序列結果。
 
-### 限制:elliptic_projection 不支援多 rank
+### elliptic_projection 的分散式 Poisson 解
 
-橢圓投影需要**全域** Poisson 解,本層刻意不做分散式 Poisson。`size > 1` 且請求
-`elliptic_projection`(或 `project_each_stage`)時,runner 會在開頭以清楚錯誤中止
-([`src/mhd_runner.cpp`](../src/mhd_runner.cpp) 的 `ensure_projection_supported_under_mpi`);
-請改用 `-np 1`,或選 hyperbolic / mixed_glm / parabolic / eglm / gi_mixed_eglm。
+多 rank 橢圓投影使用 matrix-free conjugate gradient 解週期 Poisson 方程。
+每個 rank 只配置含 ghost cells 的局部 scalar arrays；每次 Laplacian 操作前交換
+`phi` halo，dot product 與 residual norm 則使用 `MPI_Allreduce`。右手邊先減去
+全域平均值以移除週期 Laplacian 的 nullspace，解完成後也將 `phi` 設為零平均。
+`-np 1` 保留原本的序列 SOR 路徑。
 
 ---
 

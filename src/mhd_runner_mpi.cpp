@@ -17,8 +17,8 @@
 //
 //  The global nx/ny must be divisible by the MPI process-grid dimensions
 //  (MPI_Dims_create chooses them); run_mhd_2d_case throws a clear error if not.
-//  elliptic_projection is rejected on more than one rank (its global Poisson
-//  solve is not decomposed); use np=1 or a local cleaning method.
+//  elliptic_projection uses the same decomposition with a matrix-free
+//  distributed conjugate-gradient Poisson solve.
 // =============================================================================
 
 #include <mpi.h>
@@ -57,7 +57,7 @@ void print_usage(const char* prog) {
         << "Domain-decomposed single-simulation runner.  Problems: orszag_tang |\n"
         << "field_loop | divergence_advection | blast_wave.  Cleaning: none |\n"
         << "hyperbolic_glm | mixed_glm | parabolic | powell_source | eglm |\n"
-        << "gi_mixed_eglm.  (elliptic_projection requires np=1.)\n";
+        << "gi_mixed_eglm | elliptic_projection.\n";
 }
 
 std::string require_value(int argc, char* argv[], int& i, const std::string& opt) {

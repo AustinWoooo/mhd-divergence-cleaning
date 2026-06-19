@@ -445,10 +445,9 @@ mpirun -np 4 ./build-mpi/mhd_runner_mpi \
 
 The global `nx`/`ny` must be divisible by the process-grid dimensions (chosen by
 `MPI_Dims_create`).  Running with a single rank (`-np 1`) reproduces the serial
-result.  `elliptic_projection` is **not** supported on more than one rank — its
-global Poisson solve is not decomposed — and the runner aborts early with a
-clear message; use `-np 1` or a local cleaning method
-(`hyperbolic_glm`/`mixed_glm`/`parabolic`/`eglm`/`gi_mixed_eglm`).  See
+result.  Multi-rank `elliptic_projection` uses a matrix-free conjugate-gradient
+solve of the periodic Poisson equation, with scalar halo exchanges and global
+reductions for dot products and convergence norms.  See
 [`docs/parallelism.md`](docs/parallelism.md) for the full design.
 
 ## Assignment Checklist

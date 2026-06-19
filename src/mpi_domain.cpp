@@ -78,6 +78,37 @@ void shift_states(
     unpack_states(U, nx_pad, recv_ci0, recv_cj0, cw, ch, rbuf);
 }
 
+// Sendrecv a packed scalar region and replace the destination rectangle.
+void shift_scalars(
+    std::vector<double>& field, int nx_pad,
+    int send_ci0, int send_cj0, int cw, int ch,
+    int recv_ci0, int recv_cj0,
+    int dest, int source, MPI_Comm cart
+) {
+    const std::size_t n = static_cast<std::size_t>(cw) * ch;
+    std::vector<double> sbuf(n), rbuf(n);
+
+    std::size_t k = 0;
+    for (int j = send_cj0; j < send_cj0 + ch; ++j) {
+        for (int i = send_ci0; i < send_ci0 + cw; ++i) {
+            sbuf[k++] = field[idx2d(i, j, nx_pad)];
+        }
+    }
+
+    MPI_Sendrecv(
+        sbuf.data(), static_cast<int>(n), MPI_DOUBLE, dest, 9,
+        rbuf.data(), static_cast<int>(n), MPI_DOUBLE, source, 9,
+        cart, MPI_STATUS_IGNORE
+    );
+
+    k = 0;
+    for (int j = recv_cj0; j < recv_cj0 + ch; ++j) {
+        for (int i = recv_ci0; i < recv_ci0 + cw; ++i) {
+            field[idx2d(i, j, nx_pad)] = rbuf[k++];
+        }
+    }
+}
+
 // As shift_states but for a char mask, OR-combining the incoming values into
 // the destination rectangle (so a face flagged on either side stays flagged).
 void shift_mask_or(
@@ -198,6 +229,27 @@ void exchange_halos(std::vector<State>& U, const MPIDomain* d) {
                  /*send*/ ng, 0,             ng, ny_pad,   // left interior cols
                  /*recv*/ ng + nx_loc, 0,                   // right ghost
                  d->nbr_left, d->nbr_right, d->cart);
+}
+
+void exchange_scalar_halos(std::vector<double>& field, const MPIDomain* d) {
+    if (!d || !d->active) {
+        return;
+    }
+
+    const int ng = d->ng;
+    const int nx_pad = d->nx_pad();
+    const int nx_loc = d->nx_loc;
+    const int ny_loc = d->ny_loc;
+    const int ny_pad = d->ny_pad();
+
+    shift_scalars(field, nx_pad, ng, ny_loc, nx_loc, ng, ng, 0,
+                  d->nbr_up, d->nbr_down, d->cart);
+    shift_scalars(field, nx_pad, ng, ng, nx_loc, ng, ng, ng + ny_loc,
+                  d->nbr_down, d->nbr_up, d->cart);
+    shift_scalars(field, nx_pad, nx_loc, 0, ng, ny_pad, 0, 0,
+                  d->nbr_right, d->nbr_left, d->cart);
+    shift_scalars(field, nx_pad, ng, 0, ng, ny_pad, ng + nx_loc, 0,
+                  d->nbr_left, d->nbr_right, d->cart);
 }
 
 void exchange_halo_mask_or(std::vector<char>& M, const MPIDomain* d) {

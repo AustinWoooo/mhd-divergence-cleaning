@@ -89,6 +89,13 @@ MPIDomain make_domain(int nx_g, int ny_g, int ng);
 // No-op when d is null or inactive.
 void exchange_halos(std::vector<State>& U_padded, const MPIDomain* d);
 
+// Fill ghost layers of a padded scalar field.  This is the scalar counterpart
+// of exchange_halos() and is used by matrix-free distributed stencil operators.
+void exchange_scalar_halos(
+    std::vector<double>& field_padded,
+    const MPIDomain* d
+);
+
 // Halo exchange of a padded char mask combined with logical OR on overlap.
 // Used by the positivity-limiter LLF re-sweep so shared faces agree across
 // ranks.  No-op when d is null or inactive.
@@ -114,6 +121,7 @@ std::vector<State> gather_to_root(
 #else  // ----------------- serial build: inline identity stubs -----------------
 
 inline void exchange_halos(std::vector<State>&, const MPIDomain*) {}
+inline void exchange_scalar_halos(std::vector<double>&, const MPIDomain*) {}
 inline void exchange_halo_mask_or(std::vector<char>&, const MPIDomain*) {}
 
 inline double    global_max(double x,    const MPIDomain*) { return x; }

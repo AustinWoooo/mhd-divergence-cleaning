@@ -1032,10 +1032,12 @@ void preserve_thermal_pressure_after_cleaning(
 ProjectionResult apply_elliptic_projection_theta_limited(
     std::vector<State>& U,
     const GLM2DParams& params,
-    double gamma
+    double gamma,
+    const MPIDomain* domain = nullptr
 ) {
     std::vector<double> phi;
-    const ProjectionResult info = solve_projection_phi_2d(U, params, phi);
+    const ProjectionResult info =
+        solve_projection_phi_2d(U, params, phi, domain);
 
     const std::vector<State> Upre = U;
 
@@ -1044,10 +1046,10 @@ ProjectionResult apply_elliptic_projection_theta_limited(
 
     while (theta >= MIN_PROJECTION_THETA) {
         U = Upre;
-        apply_projection_B_correction_2d(U, phi, params, theta);
+        apply_projection_B_correction_2d(U, phi, params, theta, domain);
 
         // Check that ALL cells have positive raw pressure.
-        const MinPhysical mp = compute_min_physical(U, gamma);
+        const MinPhysical mp = compute_min_physical(U, gamma, domain);
         if (mp.min_pressure > 0.0) {
             found_physical = true;
             break;
@@ -1060,30 +1062,12 @@ ProjectionResult apply_elliptic_projection_theta_limited(
         // Apply minimum available theta even though state is still non-physical.
         // The caller will detect this via the returned theta and bad-state scan.
         U = Upre;
-        apply_projection_B_correction_2d(U, phi, params, theta);
+        apply_projection_B_correction_2d(U, phi, params, theta, domain);
     }
 
     ProjectionResult result = info;
     result.projection_theta = theta;
     return result;
-}
-
-// elliptic_projection (and project-each-stage) rely on a GLOBAL Poisson solve,
-// which is deliberately NOT domain-decomposed (see docs/parallelism.md).  Refuse
-// such runs on more than one rank with a clear message; np=1 still works because
-// the single rank holds the whole grid.  Every rank calls run_mhd_2d_case with
-// identical arguments, so this throw is collective.  No-op in serial.
-void ensure_projection_supported_under_mpi(
-    bool projection_requested,
-    const MPIDomain* domain
-) {
-    if (projection_requested && domain && domain->active && domain->size > 1) {
-        throw std::invalid_argument(
-            "elliptic_projection is not supported under multi-rank MPI domain "
-            "decomposition: its global Poisson solve is not decomposed. Run it "
-            "with a single rank (mpirun -np 1) or pick a hyperbolic / mixed_glm "
-            "/ parabolic / eglm / powell cleaning method instead.");
-    }
 }
 
 ProjectionResult apply_cleaning_update_for_runner(
@@ -1094,12 +1078,12 @@ ProjectionResult apply_cleaning_update_for_runner(
     const MPIDomain* domain = nullptr
 ) {
     if (type == CleaningType::ELLIPTIC_PROJECTION) {
-        ensure_projection_supported_under_mpi(true, domain);
         if (params.energy_policy == CleaningEnergyPolicy::ConserveTotalEnergy) {
             // Task E: use relaxed projection limiter.
-            return apply_elliptic_projection_theta_limited(U, params, gamma);
+            return apply_elliptic_projection_theta_limited(
+                U, params, gamma, domain);
         }
-        return apply_elliptic_projection_2d(U, params);
+        return apply_elliptic_projection_2d(U, params, domain);
     }
 
     advance_glm_2d_one_step(U, type, params);
@@ -1216,22 +1200,34 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
                     false,
                     std::max(1, run_params.diagnostic_stride)
                 );
-            write_projection_correction_diagnostic(
-                Ubefore_projection,
-                U,
-                run_params,
-                method_name,
-                diagnostic_step,
-                sub + 1,
-                diagnostic_time,
-                max_cfast_seen,
-                write_grid
-            );
+            const std::vector<State> before_global =
+                gather_to_root(Ubefore_projection, domain);
+            const std::vector<State> after_global = gather_to_root(U, domain);
+            const bool is_root =
+                !domain || !domain->active || domain->rank == 0;
+            if (is_root) {
+                MHDRunParams diagnostic_params = run_params;
+                if (domain && domain->active) {
+                    diagnostic_params.glm.nx = domain->nx_g;
+                    diagnostic_params.glm.ny = domain->ny_g;
+                }
+                write_projection_correction_diagnostic(
+                    before_global,
+                    after_global,
+                    diagnostic_params,
+                    method_name,
+                    diagnostic_step,
+                    sub + 1,
+                    diagnostic_time,
+                    max_cfast_seen,
+                    write_grid
+                );
+            }
         }
 
         // Task A: record min physical after B correction (before energy repair).
         {
-            const MinPhysical mp = compute_min_physical(U, gamma);
+            const MinPhysical mp = compute_min_physical(U, gamma, domain);
             stats.stage_mins.min_pressure_after_cleaning_B =
                 std::min(stats.stage_mins.min_pressure_after_cleaning_B,
                          mp.min_pressure);
@@ -1246,7 +1242,7 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
 
         // Task A: record min physical after energy repair (or no-op if no repair).
         {
-            const MinPhysical mp = compute_min_physical(U, gamma);
+            const MinPhysical mp = compute_min_physical(U, gamma, domain);
             stats.stage_mins.min_pressure_after_energy_repair =
                 std::min(stats.stage_mins.min_pressure_after_energy_repair,
                          mp.min_pressure);
@@ -1816,10 +1812,8 @@ void rk2_step_hlld_2d(
 
         // For the stage projection, always apply the full theta=1 projection.
         // (The theta limiter is applied at the end-of-step projection only.)
-        // Reaching here means project_each_stage was requested, which needs the
-        // global Poisson solve -- forbidden on more than one rank.
-        ensure_projection_supported_under_mpi(true, domain);
-        apply_elliptic_projection_2d(Us, proj_params);
+        exchange_halos(Us, domain);
+        apply_elliptic_projection_2d(Us, proj_params, domain);
 
         if (repair) {
 #pragma omp parallel for schedule(static)
@@ -2005,6 +1999,8 @@ void write_mhd_run_summary(
     double actual_cp,
     double effective_cd,
     double effective_cr,
+    int output_nx,
+    int output_ny,
     const MHDRunTiming& timing
 ) {
     const std::string filename =
@@ -2134,9 +2130,9 @@ void write_mhd_run_summary(
         << timing.total_cell_updates << ","
         << timing.seconds_per_step << ","
         << timing.cell_updates_per_second << ","
-        << params.glm.nx << ","
-        << params.glm.ny << ","
-        << static_cast<long long>(params.glm.nx) * params.glm.ny << ","
+        << output_nx << ","
+        << output_ny << ","
+        << static_cast<long long>(output_nx) * output_ny << ","
         << reconstruction_name(params.reconstruction) << ","
         << limiter_name(params.limiter) << ","
         << std::max(1, params.diagnostic_stride) << ","
@@ -2416,12 +2412,6 @@ void run_mhd_2d_case(
         }
     }
 #endif
-
-    // Refuse decompositions that would need the global Poisson solve, up front.
-    ensure_projection_supported_under_mpi(
-        type == CleaningType::ELLIPTIC_PROJECTION ||
-            params.glm.project_each_stage,
-        domain);
 
     // Kernel/array dimensions: this rank's ghost-padded local block under
     // decomposition, the full global grid in serial.  Physical spacing dx/dy
@@ -3141,6 +3131,8 @@ void run_mhd_2d_case(
             run_actual_cp,
             run_effective_cd,
             run_effective_cr,
+            nx_g,
+            ny_g,
             timing_for_file
         );
     };
@@ -3155,7 +3147,7 @@ void run_mhd_2d_case(
     write_summary_with_timing(timing_before_summary);
     timing.summary_write_time_sec = seconds_since(summary_start);
     timing.total_wall_time_sec = seconds_since(run_start);
-    finalize_timing_fields(timing, nx, ny);
+    finalize_timing_fields(timing, nx_g, ny_g);
     write_summary_with_timing(timing);
 
     std::cout << "  Wrote " << diag_name << "\n";

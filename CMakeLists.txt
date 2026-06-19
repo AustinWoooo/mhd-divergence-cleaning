@@ -322,4 +322,28 @@ if(ENABLE_MPI)
         mhd_runner_mpi_smoke_check
         PROPERTIES DEPENDS mhd_runner_mpi_smoke_generate
     )
+
+    add_test(
+        NAME mhd_runner_mpi_projection_generate
+        COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+                ${MPIEXEC_PREFLAGS}
+                $<TARGET_FILE:mhd_runner_mpi>
+                ${MPIEXEC_POSTFLAGS}
+                --smoke --output-prefix mpidd_projection
+                divergence_advection elliptic_projection
+    )
+
+    add_test(
+        NAME mhd_runner_mpi_projection_check
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check/check_mhd_runner_sanity.py
+                --prefix mpidd_projection_smoke
+                --methods elliptic_projection
+                --expected-nx 32 --expected-ny 32
+    )
+
+    set_tests_properties(
+        mhd_runner_mpi_projection_check
+        PROPERTIES DEPENDS mhd_runner_mpi_projection_generate
+    )
 endif()

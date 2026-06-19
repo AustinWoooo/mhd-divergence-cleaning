@@ -90,7 +90,13 @@ def check_required_columns(path: Path, rows: list[dict[str, str]], required: set
         fail(f"{path} missing columns: {', '.join(sorted(missing))}")
 
 
-def check_method_outputs(results_dir: Path, prefix: str, method: str) -> float:
+def check_method_outputs(
+    results_dir: Path,
+    prefix: str,
+    method: str,
+    expected_nx: int | None,
+    expected_ny: int | None,
+) -> float:
     div_path = results_dir / "divergence" / f"{prefix}_{method}.csv"
     summary_path = results_dir / "summaries" / f"{prefix}_{method}_summary.csv"
 
@@ -115,6 +121,9 @@ def check_method_outputs(results_dir: Path, prefix: str, method: str) -> float:
         fail(f"{div_path} reported negative density")
     if any(int(float(row["has_negative_pressure"])) != 0 for row in div_rows):
         fail(f"{div_path} reported negative pressure")
+    if method == "elliptic_projection" and "projection_converged" in div_rows[-1]:
+        if int(float(div_rows[-1]["projection_converged"])) != 1:
+            fail(f"{div_path} reported a non-converged projection")
 
     summary_rows = read_rows(summary_path)
     check_required_columns(summary_path, summary_rows, REQUIRED_SUMMARY_COLUMNS)
@@ -125,6 +134,12 @@ def check_method_outputs(results_dir: Path, prefix: str, method: str) -> float:
         fail(f"{summary_path} status is {summary['status']}, expected finished")
     if int(float(summary["final_time_reached"])) != 1:
         fail(f"{summary_path} did not reach final time")
+    if expected_nx is not None:
+        if int(float(summary.get("nx", "nan"))) != expected_nx:
+            fail(f"{summary_path} does not report global nx={expected_nx}")
+    if expected_ny is not None:
+        if int(float(summary.get("ny", "nan"))) != expected_ny:
+            fail(f"{summary_path} does not report global ny={expected_ny}")
 
     return final_l2_norm
 
@@ -134,6 +149,8 @@ def main() -> int:
     parser.add_argument("--results-dir", default="results/mhd_runner")
     parser.add_argument("--prefix", default="mhd_ot_smoke")
     parser.add_argument("--methods", nargs="*", default=MAIN_METHODS)
+    parser.add_argument("--expected-nx", type=int)
+    parser.add_argument("--expected-ny", type=int)
     parser.add_argument(
         "--check-reduction",
         action="store_true",
@@ -149,7 +166,13 @@ def main() -> int:
     results_dir = Path(args.results_dir)
     final_l2_norm: dict[str, float] = {}
     for method in args.methods:
-        final_l2_norm[method] = check_method_outputs(results_dir, args.prefix, method)
+        final_l2_norm[method] = check_method_outputs(
+            results_dir,
+            args.prefix,
+            method,
+            args.expected_nx,
+            args.expected_ny,
+        )
 
     if args.check_reduction:
         for method in ("none", "mixed_glm", "elliptic_projection"):

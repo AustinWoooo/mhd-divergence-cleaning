@@ -5,6 +5,8 @@
 #include "glm2d_types.hpp"
 #include "state.hpp"
 
+struct MPIDomain;
+
 struct ProjectionResult {
     int iterations = 0;
     double solver_update_residual = 0.0;
@@ -22,7 +24,8 @@ struct ProjectionResult {
 // Equivalent to solve_projection_phi_2d + apply_projection_B_correction_2d(theta=1).
 ProjectionResult apply_elliptic_projection_2d(
     std::vector<State>& U,
-    const GLM2DParams& params
+    const GLM2DParams& params,
+    const MPIDomain* domain = nullptr
 );
 
 // Phase 1: solve the periodic Poisson equation
@@ -32,7 +35,8 @@ ProjectionResult apply_elliptic_projection_2d(
 ProjectionResult solve_projection_phi_2d(
     const std::vector<State>& U,
     const GLM2DParams& params,
-    std::vector<double>& phi_out
+    std::vector<double>& phi_out,
+    const MPIDomain* domain = nullptr
 );
 
 // Phase 2: apply the B correction  B <- B - theta * grad_fv(phi); zero PSI.
@@ -41,5 +45,6 @@ void apply_projection_B_correction_2d(
     std::vector<State>& U,
     const std::vector<double>& phi,
     const GLM2DParams& params,
-    double theta
+    double theta,
+    const MPIDomain* domain = nullptr
 );

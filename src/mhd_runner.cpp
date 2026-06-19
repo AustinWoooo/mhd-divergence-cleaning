@@ -21,17 +21,24 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <cstdlib>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "HLLD_mhd_solver.hpp"
+#include "eglm2d.hpp"
+#include "galilean_glm2d.hpp"
 #include "mhd_reconstruction.hpp"
 #include "glm.hpp"
 #include "glm2d.hpp"
 #include "glm2d_common.hpp"
+#include "hyperbolic_glm2d.hpp"
+#include "mixed_glm2d.hpp"
 #include "mpi_domain.hpp"
+#include "parabolic2d.hpp"
+#include "powell2d.hpp"
 #include "projection2d.hpp"
 
 namespace fs = std::filesystem;
@@ -139,6 +146,17 @@ struct CleaningAdvanceStats {
     double projection_theta = 1.0;
     // Task A: per-stage minimums recorded during the cleaning substep.
     StagePressureMins stage_mins;
+};
+
+struct StageDebugMetrics {
+    double min_pressure = std::numeric_limits<double>::infinity();
+    double min_internal_energy = std::numeric_limits<double>::infinity();
+    double max_abs_divB = 0.0;
+    double max_abs_psi = 0.0;
+    double max_Bmag = 0.0;
+    double max_velocity = 0.0;
+    double max_signal_speed = 0.0;
+    BadStateRecord first_bad;
 };
 
 struct ProjectionCorrectionSummary {
@@ -701,6 +719,156 @@ void write_optional_double(std::ostream& out, double value) {
     }
 }
 
+bool stage_debug_enabled() {
+    const char* value = std::getenv("MHD_STAGE_DEBUG");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+StageDebugMetrics compute_stage_debug_metrics(
+    const std::vector<State>& Uglob,
+    int nx,
+    int ny,
+    double dx,
+    double dy,
+    double gamma,
+    double ch,
+    bool include_ch
+) {
+    StageDebugMetrics out;
+    out.first_bad = scan_physical_state(Uglob, nx, ny, dx, dy, gamma, "stage_debug");
+
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            const State& cell = Uglob[idx2d(i, j, nx)];
+            const double rho = cell[RHO];
+            if (!(std::isfinite(rho) && rho > 0.0)) {
+                continue;
+            }
+
+            const double ke = kinetic_energy_density(cell);
+            const double me = magnetic_energy_density(cell);
+            const double internal = cell[E] - ke - me;
+            const double pressure = (gamma - 1.0) * internal;
+            out.min_internal_energy = std::min(out.min_internal_energy, internal);
+            out.min_pressure = std::min(out.min_pressure, pressure);
+
+            const double psi_abs = std::abs(cell[PSI]);
+            out.max_abs_psi = std::max(out.max_abs_psi, psi_abs);
+
+            const double Bmag = std::sqrt(
+                cell[BX] * cell[BX]
+              + cell[BY] * cell[BY]
+              + cell[BZ] * cell[BZ]
+            );
+            out.max_Bmag = std::max(out.max_Bmag, Bmag);
+
+            const double vx = cell[MX] / rho;
+            const double vy = cell[MY] / rho;
+            const double vz = cell[MZ] / rho;
+            out.max_velocity = std::max(
+                out.max_velocity,
+                std::sqrt(vx * vx + vy * vy + vz * vz)
+            );
+
+            const PrimState W = state_to_prim(cell, gamma);
+            const double a2  = gamma * std::max(W.p, 0.0) / std::max(W.rho, TINY_NUMBER);
+            const double b2  = (W.Bx*W.Bx + W.By*W.By + W.Bz*W.Bz) / std::max(W.rho, TINY_NUMBER);
+            const double bn2_x = W.Bx * W.Bx / std::max(W.rho, TINY_NUMBER);
+            const double bn2_y = W.By * W.By / std::max(W.rho, TINY_NUMBER);
+            const double term  = a2 + b2;
+            const double disc_x = std::max(term * term - 4.0 * a2 * bn2_x, 0.0);
+            const double disc_y = std::max(term * term - 4.0 * a2 * bn2_y, 0.0);
+            const double cf_x = std::sqrt(std::max(0.5 * (term + std::sqrt(disc_x)), 0.0));
+            const double cf_y = std::sqrt(std::max(0.5 * (term + std::sqrt(disc_y)), 0.0));
+            double s_local = std::max(std::abs(W.u) + cf_x, std::abs(W.v) + cf_y);
+            if (include_ch) {
+                s_local = std::max(s_local, ch);
+            }
+            out.max_signal_speed = std::max(out.max_signal_speed, s_local);
+
+            const double divB = std::abs(
+                compute_fv_divB_cell_2d(Uglob, nx, ny, i, j, dx, dy)
+            );
+            out.max_abs_divB = std::max(out.max_abs_divB, divB);
+        }
+    }
+
+    return out;
+}
+
+void write_stage_debug_row(
+    std::ofstream* debug,
+    const std::vector<State>& U,
+    const MPIDomain* domain,
+    int nx_g,
+    int ny_g,
+    const std::string& method,
+    const std::string& stage,
+    int step,
+    int substep,
+    double time,
+    double dt,
+    double dx,
+    double dy,
+    double gamma,
+    double ch,
+    bool include_ch
+) {
+    if (debug == nullptr) {
+        return;
+    }
+
+    const std::vector<State> Uglob = gather_to_root(U, domain);
+    if (domain && domain->active && domain->rank != 0) {
+        return;
+    }
+
+    const StageDebugMetrics metrics =
+        compute_stage_debug_metrics(Uglob, nx_g, ny_g, dx, dy, gamma, ch, include_ch);
+
+    (*debug) << method << ","
+             << stage << ","
+             << step << ","
+             << substep << ","
+             << time << ","
+             << dt << ","
+             << metrics.min_pressure << ","
+             << metrics.min_internal_energy << ","
+             << metrics.max_abs_divB << ","
+             << metrics.max_abs_psi << ","
+             << metrics.max_Bmag << ","
+             << metrics.max_velocity << ","
+             << metrics.max_signal_speed << ",";
+
+    if (metrics.first_bad.found) {
+        (*debug) << metrics.first_bad.i << ","
+                 << metrics.first_bad.j << ","
+                 << metrics.first_bad.rho << ","
+                 << Uglob[idx2d(metrics.first_bad.i, metrics.first_bad.j, nx_g)][MX] << ","
+                 << Uglob[idx2d(metrics.first_bad.i, metrics.first_bad.j, nx_g)][MY] << ","
+                 << Uglob[idx2d(metrics.first_bad.i, metrics.first_bad.j, nx_g)][MZ] << ","
+                 << metrics.first_bad.total_energy << ","
+                 << metrics.first_bad.Bx << ","
+                 << metrics.first_bad.By << ","
+                 << metrics.first_bad.Bz << ","
+                 << metrics.first_bad.psi << ","
+                 << metrics.first_bad.pressure << ",";
+
+        const State& bad =
+            Uglob[idx2d(metrics.first_bad.i, metrics.first_bad.j, nx_g)];
+        const PrimState Wbad = state_to_prim(bad, gamma);
+        (*debug) << Wbad.rho << ","
+                 << Wbad.u << ","
+                 << Wbad.v << ","
+                 << Wbad.w;
+    } else {
+        for (int k = 0; k < 15; ++k) {
+            (*debug) << ",";
+        }
+    }
+    (*debug) << "\n";
+}
+
 bool projection_correction_diagnostics_active(
     const MHDRunParams& params,
     CleaningType type
@@ -1005,20 +1173,7 @@ void print_mhd_run_failure_warning(
 }
 
 bool pressure_preserving_policy_applies(CleaningType type) {
-    return type == CleaningType::PARABOLIC
-        || type == CleaningType::ELLIPTIC_PROJECTION;
-}
-
-void preserve_thermal_pressure_after_cleaning(
-    std::vector<State>& U,
-    const std::vector<State>& Uold
-) {
-    const int ncell = static_cast<int>(U.size());
-    for (int id = 0; id < ncell; ++id) {
-        const double old_me = magnetic_energy_density(Uold[id]);
-        const double new_me = magnetic_energy_density(U[id]);
-        U[id][E] = Uold[id][E] + (new_me - old_me);
-    }
+    return type == CleaningType::PARABOLIC;
 }
 
 // Task E: Elliptic projection with a relaxed limiter for conserve_total_energy.
@@ -1102,7 +1257,10 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
     double gamma,
     bool print_parabolic_subcycling,
     double max_cfast_seen,
-    const MPIDomain* domain = nullptr
+    const MPIDomain* domain = nullptr,
+    std::ofstream* stage_debug = nullptr,
+    int nx_g = 0,
+    int ny_g = 0
 ) {
     CleaningAdvanceStats stats;
 
@@ -1167,8 +1325,78 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
             Ubefore_projection = U;
         }
 
-        const ProjectionResult projection =
-            apply_cleaning_update_for_runner(U, type, params, gamma, domain);
+        write_stage_debug_row(
+            stage_debug, U, domain, nx_g, ny_g, method_name,
+            "before_cleaning_subcycle", step, sub + 1, time, dt_sub,
+            params.dx, params.dy, gamma, params.ch, is_glm_cleaning(type)
+        );
+
+        auto write_component_stage = [&](const char* stage_name) {
+            write_stage_debug_row(
+                stage_debug, U, domain, nx_g, ny_g, method_name,
+                stage_name, step, sub + 1,
+                time + dt_sub * static_cast<double>(sub + 1), dt_sub,
+                params.dx, params.dy, gamma, params.ch, is_glm_cleaning(type)
+            );
+        };
+
+        ProjectionResult projection;
+        if (stage_debug != nullptr) {
+            switch (type) {
+                case CleaningType::HYPERBOLIC_GLM:
+                    update_hyperbolic_glm_2d(U, params);
+                    write_component_stage("after_hyperbolic_glm_update");
+                    break;
+                case CleaningType::MIXED_GLM:
+                    update_hyperbolic_glm_2d(U, params);
+                    write_component_stage("after_hyperbolic_glm_update");
+                    apply_mixed_glm_damping_2d(U, params);
+                    write_component_stage("after_mixed_glm_damping");
+                    break;
+                case CleaningType::PARABOLIC:
+                    apply_parabolic_cleaning_2d(U, params);
+                    write_component_stage("after_parabolic_cleaning");
+                    break;
+                case CleaningType::ELLIPTIC_PROJECTION:
+                    projection =
+                        apply_cleaning_update_for_runner(
+                            U, type, params, gamma, domain);
+                    write_component_stage("after_elliptic_projection");
+                    break;
+                case CleaningType::POWELL_SOURCE:
+                    apply_powell_source_2d(U, params);
+                    write_component_stage("after_powell_source");
+                    break;
+                case CleaningType::MIXED_EGLM: {
+                    const std::vector<State> Uref = U;
+                    update_mixed_glm_2d(U, params);
+                    write_component_stage("after_mixed_glm_update");
+                    apply_eglm_source_2d(U, Uref, params);
+                    write_component_stage("after_eglm_source");
+                    break;
+                }
+                case CleaningType::GI_MIXED_EGLM: {
+                    const std::vector<State> Uref = U;
+                    update_mixed_glm_2d(U, params);
+                    write_component_stage("after_mixed_glm_update");
+                    apply_gi_eglm_source_2d(U, Uref, params);
+                    write_component_stage("after_gi_eglm_source");
+                    break;
+                }
+                case CleaningType::NONE:
+                    break;
+            }
+        } else {
+            projection =
+                apply_cleaning_update_for_runner(U, type, params, gamma, domain);
+        }
+
+        write_stage_debug_row(
+            stage_debug, U, domain, nx_g, ny_g, method_name,
+            "after_cleaning_update", step, sub + 1,
+            time + dt_sub * static_cast<double>(sub + 1), dt_sub,
+            params.dx, params.dy, gamma, params.ch, is_glm_cleaning(type)
+        );
 
         if (projection.iterations > 0 || type == CleaningType::ELLIPTIC_PROJECTION) {
             stats.projection_used = true;
@@ -1237,8 +1465,15 @@ CleaningAdvanceStats apply_cleaning_with_subcycles(
         }
 
         if (repair_energy) {
-            preserve_thermal_pressure_after_cleaning(U, Uold);
+            preserve_thermal_pressure_after_magnetic_update(U, Uold);
         }
+
+        write_stage_debug_row(
+            stage_debug, U, domain, nx_g, ny_g, method_name,
+            "after_energy_repair", step, sub + 1,
+            time + dt_sub * static_cast<double>(sub + 1), dt_sub,
+            params.dx, params.dy, gamma, params.ch, is_glm_cleaning(type)
+        );
 
         // Task A: record min physical after energy repair (or no-op if no repair).
         {
@@ -1801,33 +2036,18 @@ void rk2_step_hlld_2d(
         GLM2DParams proj_params = *stage_glm_params;
         proj_params.dt = dt;
 
-        const bool repair =
-            (proj_params.energy_policy ==
-             CleaningEnergyPolicy::PreserveThermalPressure);
-
-        std::vector<State> Us_pre;
-        if (repair) {
-            Us_pre = Us;
-        }
-
-        // For the stage projection, always apply the full theta=1 projection.
-        // (The theta limiter is applied at the end-of-step projection only.)
         exchange_halos(Us, domain);
-        apply_elliptic_projection_2d(Us, proj_params, domain);
-
-        if (repair) {
-#pragma omp parallel for schedule(static)
-            for (int id = 0; id < ncell; ++id) {
-                const double old_me =
-                    0.5 * (Us_pre[id][BX]*Us_pre[id][BX]
-                         + Us_pre[id][BY]*Us_pre[id][BY]
-                         + Us_pre[id][BZ]*Us_pre[id][BZ]);
-                const double new_me =
-                    0.5 * (Us[id][BX]*Us[id][BX]
-                         + Us[id][BY]*Us[id][BY]
-                         + Us[id][BZ]*Us[id][BZ]);
-                Us[id][E] = Us_pre[id][E] + (new_me - old_me);
-            }
+        if (proj_params.energy_policy ==
+            CleaningEnergyPolicy::ConserveTotalEnergy) {
+            // Match the end-of-step safety contract: under conserved total
+            // energy, a projection that raises magnetic energy can drive the
+            // predictor-state thermal pressure negative.  Reuse the same
+            // theta-limited path here before Us becomes the corrector flux
+            // state.
+            apply_elliptic_projection_theta_limited(
+                Us, proj_params, gamma, domain);
+        } else {
+            apply_elliptic_projection_2d(Us, proj_params, domain);
         }
     }
 
@@ -2459,6 +2679,7 @@ void run_mhd_2d_case(
     params.glm.ch = params.glm.glm_ch_factor * ch_init;
 
     const bool glm_active = is_glm_cleaning(type);
+    const bool stage_debug_active = stage_debug_enabled();
 
     const std::string name   = cleaning_name(type);
     const std::string prefix = params.glm.out_prefix;
@@ -2517,6 +2738,7 @@ void run_mhd_2d_case(
             prefix + "_" + name + ".csv"
         ).string();
     std::ofstream diag;
+    std::ofstream stage_debug;
     if (is_root) {
         diag.open(diag_name);
         if (!diag) {
@@ -2537,6 +2759,28 @@ void run_mhd_2d_case(
              << "projection_true_residual,"
              << "projection_converged\n";
         timing.diagnostics_write_time_sec += seconds_since(diag_write_start);
+
+        if (stage_debug_active) {
+            const std::string debug_name =
+                runner_output_path(
+                    params,
+                    "stage_debug",
+                    prefix + "_" + name + "_stage_debug.csv"
+                ).string();
+            ensure_parent_directory(debug_name);
+            stage_debug.open(debug_name);
+            if (!stage_debug) {
+                throw std::runtime_error(
+                    "Failed to open stage debug file: " + debug_name);
+            }
+            stage_debug
+                << "method,stage,step,substep,time,dt,"
+                << "min_pressure,min_internal_energy,"
+                << "max_abs_divB,max_abs_psi,max_Bmag,max_velocity,max_signal_speed,"
+                << "bad_i,bad_j,bad_rho,bad_mx,bad_my,bad_mz,bad_E,"
+                << "bad_Bx,bad_By,bad_Bz,bad_psi,bad_pressure,"
+                << "bad_prim_rho,bad_vx,bad_vy,bad_vz\n";
+        }
     }
 
     double t    = 0.0;
@@ -2701,6 +2945,11 @@ void run_mhd_2d_case(
             step_stage_mins.min_pressure_before_hydro = mp.min_pressure;
             step_stage_mins.min_density_before_hydro  = mp.min_density;
         }
+        write_stage_debug_row(
+            stage_debug_active ? &stage_debug : nullptr,
+            U, domain, nx_g, ny_g, name, "before_hydro_step", step, 0, t, dt,
+            dx, dy, gamma, params.glm.ch, glm_active
+        );
 
         // =====================================================================
         // Tasks D + A: full-step retry loop.
@@ -2762,6 +3011,12 @@ void run_mhd_2d_case(
             after_hydro_failed =
                 global_lor(after_hydro_bad.found ? 1 : 0, domain) != 0;
 
+            write_stage_debug_row(
+                stage_debug_active ? &stage_debug : nullptr,
+                U, domain, nx_g, ny_g, name, "after_hydro_step", step, 0,
+                t + dt, dt, dx, dy, gamma, params.glm.ch, glm_active
+            );
+
             if (after_hydro_failed) {
                 if (total_retries < max_retries) {
                     dt *= 0.5;
@@ -2793,7 +3048,10 @@ void run_mhd_2d_case(
                     type == CleaningType::PARABOLIC &&
                         !printed_parabolic_subcycling,
                     max_cfast_seen,
-                    domain
+                    domain,
+                    stage_debug_active ? &stage_debug : nullptr,
+                    nx_g,
+                    ny_g
                 );
             timing.cleaning_time_sec += seconds_since(cleaning_start);
             cleaning_failed =
@@ -2978,6 +3236,11 @@ void run_mhd_2d_case(
                 run_stage_mins.min_pressure_after_full_step,
                 mp.min_pressure);
         }
+        write_stage_debug_row(
+            stage_debug_active ? &stage_debug : nullptr,
+            U, domain, nx_g, ny_g, name, "after_full_step", step, 0, t, dt,
+            dx, dy, gamma, params.glm.ch, glm_active
+        );
 
         if (cleaning_failed) {
             stopped_for_failure = true;

@@ -475,7 +475,7 @@ def plot_history_all_map_problems(
                 continue
 
             if quantity == "min_pressure":
-                y = series_or_nan(df, ["min_pressure", "min_p"])
+                y = series_or_nan(df, ["min_raw_pressure", "min_pressure", "min_p", "min_pressure_after_full_step"])
             elif quantity == "energy_drift":
                 energy = series_or_nan(df, ["total_energy", "energy"])
                 finite = energy[np.isfinite(energy)]
@@ -519,7 +519,10 @@ def plot_history_all_map_problems(
     plt.close()
 
 
-def plot_blast_min_pressure(output_name: str = "mhd_runner_blast_min_pressure.png"):
+def plot_blast_min_pressure(
+    output_name: str = "mhd_runner_blast_min_pressure.png",
+    log_scale: bool = False,
+):
     spec = PROBLEMS["blast_wave"]
     prefix = spec["prefix"]
     fig, ax = plt.subplots(figsize=(8.8, 4.8))
@@ -530,11 +533,25 @@ def plot_blast_min_pressure(output_name: str = "mhd_runner_blast_min_pressure.pn
         if df is None:
             continue
 
-        y = series_or_nan(df, ["min_pressure", "min_p"])
+        y = series_or_nan(df, ["min_raw_pressure", "min_pressure", "min_p", "min_pressure_after_full_step"])
+
+        # log scale 只能畫正值
+        if log_scale:
+            mask = np.isfinite(df["time"]) & np.isfinite(y) & (y > 0.0)
+            xplot = df["time"][mask]
+            yplot = y[mask]
+        else:
+            mask = np.isfinite(df["time"]) & np.isfinite(y)
+            xplot = df["time"][mask]
+            yplot = y[mask]
+
+        if len(xplot) == 0:
+            continue
+
         style = method_style(method)
         ax.plot(
-            df["time"],
-            y,
+            xplot,
+            yplot,
             color=style["color"],
             ls=style["ls"],
             lw=1.9,
@@ -550,8 +567,15 @@ def plot_blast_min_pressure(output_name: str = "mhd_runner_blast_min_pressure.pn
     ax.set_title(spec["title"])
     ax.set_xlabel("time")
     ax.set_ylabel("Minimum pressure")
-    ax.set_xlim(left=0.0)
+    ax.set_xlim(0.0, 0.2)
     ax.grid(True, alpha=0.3)
+
+    if log_scale:
+        ax.set_yscale("log")
+        ax.set_ylim(1e-4, 2e-1)
+    else:
+        ax.set_ylim(-0.005, 0.105)
+
     ax.legend(fontsize=8.5, loc="center left", bbox_to_anchor=(1.02, 0.5))
     plt.tight_layout()
 
@@ -978,7 +1002,8 @@ def main():
         ],
         "mhd_runner_blast_snapshot_projection.png",
     )
-    plot_blast_min_pressure()
+    plot_blast_min_pressure("mhd_runner_blast_min_pressure.png", log_scale=False)
+    plot_blast_min_pressure("mhd_runner_blast_min_pressure_log.png", log_scale=True)
 
     print("\n=== Cross-problem diagnostics ===")
     plot_history_all_map_problems(

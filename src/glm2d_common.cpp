@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -158,4 +159,32 @@ std::vector<double> compute_fv_divB_field_2d(
     }
 
     return divB;
+}
+
+void preserve_thermal_pressure_after_magnetic_update(
+    std::vector<State>& U,
+    const std::vector<State>& U_before
+) {
+    if (U.size() != U_before.size()) {
+        throw std::invalid_argument(
+            "preserve_thermal_pressure_after_magnetic_update: "
+            "state size mismatch"
+        );
+    }
+
+    const int ncell = static_cast<int>(U.size());
+#pragma omp parallel for schedule(static)
+    for (int id = 0; id < ncell; ++id) {
+        const double old_me = 0.5 * (
+            U_before[id][BX] * U_before[id][BX]
+          + U_before[id][BY] * U_before[id][BY]
+          + U_before[id][BZ] * U_before[id][BZ]
+        );
+        const double new_me = 0.5 * (
+            U[id][BX] * U[id][BX]
+          + U[id][BY] * U[id][BY]
+          + U[id][BZ] * U[id][BZ]
+        );
+        U[id][E] = U_before[id][E] + (new_me - old_me);
+    }
 }

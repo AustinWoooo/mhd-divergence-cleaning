@@ -62,3 +62,11 @@ std::vector<double> compute_fv_divB_field_2d(
     double dx,
     double dy
 );
+
+// Repair total energy after a magnetic-only cleaning update so the thermal
+// pressure/internal energy implied by the conserved state is unchanged.
+// Callers are expected to pass the pre-cleaning state in U_before.
+void preserve_thermal_pressure_after_magnetic_update(
+    std::vector<State>& U,
+    const std::vector<State>& U_before
+);

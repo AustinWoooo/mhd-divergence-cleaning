@@ -31,7 +31,8 @@ void apply_eglm_source_2d(
 //
 // Operator-split order:
 //   1. Save Uold.
-//   2. Apply mixed GLM update to B and psi.
+//   2. Apply mixed GLM update to B and psi, including the policy-selected
+//      magnetic-energy repair before any EGLM source terms.
 //   3. Apply EGLM source using Uold as reference state.
 void update_mixed_eglm_2d(
     std::vector<State>& U,

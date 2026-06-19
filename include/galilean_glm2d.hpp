@@ -28,8 +28,9 @@ void apply_gi_eglm_source_2d(
     const GLM2DParams& params
 );
 
-// Galilean-invariant mixed EGLM = mixed GLM B-psi update plus the
-// non-conservative GI-EGLM source above.
+// Galilean-invariant mixed EGLM = mixed GLM B-psi update (including the
+// policy-selected magnetic-energy repair) followed by the non-conservative
+// GI-EGLM source above. The source's own B/E changes are not repaired again.
 void update_gi_mixed_eglm_2d(
     std::vector<State>& U,
     const GLM2DParams& params

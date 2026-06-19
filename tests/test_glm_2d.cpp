@@ -9,6 +9,7 @@
 #include "glm.hpp"
 #include "glm2d.hpp"
 #include "glm2d_common.hpp"
+#include "hyperbolic_glm2d.hpp"
 #include "mixed_glm2d.hpp"
 #include "parabolic2d.hpp"
 #include "powell2d.hpp"
@@ -123,6 +124,134 @@ void assert_positive_raw_pressure(
         assert(cell[RHO] > 0.0);
         assert(raw_pressure(cell, gamma) > 0.0);
     }
+}
+
+void test_hyperbolic_glm_energy_policy() {
+    constexpr double gamma = 5.0 / 3.0;
+
+    GLM2DParams params;
+    params.nx = 8;
+    params.ny = 8;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+    params.dt = 5.0e-4;
+    params.ch = 2.0;
+    params.energy_policy = CleaningEnergyPolicy::PreserveThermalPressure;
+
+    std::vector<State> U(params.nx * params.ny);
+    fill_divergent_test_state(U, params.nx, params.ny);
+    for (State& cell : U) {
+        cell[RHO] = 1.0;
+        cell[MX] = 0.03;
+        cell[MY] = -0.02;
+        cell[MZ] = 0.01;
+        set_total_energy_from_pressure(cell, 1.0e-5, gamma);
+    }
+
+    const std::vector<State> U_before = U;
+    update_hyperbolic_glm_2d(U, params);
+
+    bool changed_B = false;
+    for (std::size_t id = 0; id < U.size(); ++id) {
+        const double delta_magnetic =
+            magnetic_energy(U[id]) - magnetic_energy(U_before[id]);
+        assert(approx_equal(
+            U[id][E] - U_before[id][E], delta_magnetic, 1.0e-12));
+        assert(approx_equal(
+            raw_internal_energy(U[id]),
+            raw_internal_energy(U_before[id]),
+            1.0e-12));
+        assert(approx_equal(
+            raw_pressure(U[id], gamma),
+            raw_pressure(U_before[id], gamma),
+            1.0e-12));
+        changed_B = changed_B
+            || !approx_equal(U[id][BX], U_before[id][BX], 1.0e-14)
+            || !approx_equal(U[id][BY], U_before[id][BY], 1.0e-14);
+    }
+    assert(changed_B);
+
+    params.energy_policy = CleaningEnergyPolicy::ConserveTotalEnergy;
+    U = U_before;
+    update_hyperbolic_glm_2d(U, params);
+    for (std::size_t id = 0; id < U.size(); ++id) {
+        assert(U[id][E] == U_before[id][E]);
+    }
+
+    std::cout << "Hyperbolic GLM energy-policy assertion passed.\n";
+}
+
+void test_mixed_eglm_repairs_only_glm_update() {
+    constexpr double gamma = 5.0 / 3.0;
+
+    GLM2DParams params;
+    params.nx = 8;
+    params.ny = 8;
+    params.dx = 1.0 / static_cast<double>(params.nx);
+    params.dy = 1.0 / static_cast<double>(params.ny);
+    params.dt = 5.0e-4;
+    params.ch = 2.0;
+    params.cp = 0.3;
+    params.energy_policy = CleaningEnergyPolicy::PreserveThermalPressure;
+
+    std::vector<State> U_before(params.nx * params.ny);
+    fill_divergent_test_state(U_before, params.nx, params.ny);
+    for (State& cell : U_before) {
+        set_total_energy_from_pressure(cell, 0.2, gamma);
+    }
+
+    std::vector<State> after_glm = U_before;
+    update_mixed_glm_2d(after_glm, params);
+
+    bool glm_changed_B = false;
+    for (std::size_t id = 0; id < after_glm.size(); ++id) {
+        assert(approx_equal(
+            raw_internal_energy(after_glm[id]),
+            raw_internal_energy(U_before[id]),
+            1.0e-12));
+        glm_changed_B = glm_changed_B
+            || !approx_equal(after_glm[id][BX], U_before[id][BX], 1.0e-14)
+            || !approx_equal(after_glm[id][BY], U_before[id][BY], 1.0e-14);
+    }
+    assert(glm_changed_B);
+
+    std::vector<State> expected_eglm = after_glm;
+    apply_eglm_source_2d(expected_eglm, U_before, params);
+    std::vector<State> actual_eglm = U_before;
+    update_mixed_eglm_2d(actual_eglm, params);
+
+    bool eglm_source_changed_energy = false;
+    for (std::size_t id = 0; id < actual_eglm.size(); ++id) {
+        for (int k = 0; k < NVAR; ++k) {
+            assert(approx_equal(actual_eglm[id][k], expected_eglm[id][k]));
+        }
+        eglm_source_changed_energy = eglm_source_changed_energy
+            || !approx_equal(actual_eglm[id][E], after_glm[id][E], 1.0e-14);
+    }
+    assert(eglm_source_changed_energy);
+
+    std::vector<State> expected_gi = after_glm;
+    apply_gi_eglm_source_2d(expected_gi, U_before, params);
+    std::vector<State> actual_gi = U_before;
+    update_gi_mixed_eglm_2d(actual_gi, params);
+
+    bool gi_source_changed_B = false;
+    bool gi_source_changed_energy = false;
+    for (std::size_t id = 0; id < actual_gi.size(); ++id) {
+        for (int k = 0; k < NVAR; ++k) {
+            assert(approx_equal(actual_gi[id][k], expected_gi[id][k]));
+        }
+        gi_source_changed_B = gi_source_changed_B
+            || !approx_equal(actual_gi[id][BX], after_glm[id][BX], 1.0e-14)
+            || !approx_equal(actual_gi[id][BY], after_glm[id][BY], 1.0e-14)
+            || !approx_equal(actual_gi[id][BZ], after_glm[id][BZ], 1.0e-14);
+        gi_source_changed_energy = gi_source_changed_energy
+            || !approx_equal(actual_gi[id][E], after_glm[id][E], 1.0e-14);
+    }
+    assert(gi_source_changed_B);
+    assert(gi_source_changed_energy);
+
+    std::cout << "Mixed EGLM/GI-EGLM repair-order assertion passed.\n";
 }
 
 void test_eglm_source_one_step() {
@@ -954,6 +1083,8 @@ void test_pure_glm_cleaning_reduces_sinusoidal_divergence() {
 } // namespace
 
 int main() {
+    test_hyperbolic_glm_energy_policy();
+    test_mixed_eglm_repairs_only_glm_update();
     test_eglm_source_one_step();
     test_powell_source_one_step();
     test_gi_eglm_source_one_step();

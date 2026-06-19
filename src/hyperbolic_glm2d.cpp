@@ -99,4 +99,9 @@ void update_hyperbolic_glm_2d(
             U[idx2d(i, j, nx)] = cell;
         }
     }
+
+    if (params.energy_policy ==
+        CleaningEnergyPolicy::PreserveThermalPressure) {
+        preserve_thermal_pressure_after_magnetic_update(U, Uold);
+    }
 }
